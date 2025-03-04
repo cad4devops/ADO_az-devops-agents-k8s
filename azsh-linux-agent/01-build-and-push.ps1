@@ -1,4 +1,4 @@
-$your_tag = "yourtag"
+$your_tag = "ubuntu-24.04"
 $containerRegistryName = "cragentssgvhe4aipy37o.azurecr.io"
 $repositoryName = "azsh-linux-agent"
 
