@@ -37,6 +37,8 @@ spec:
           volumeMounts:
             - mountPath: /var/run/docker.sock
               name: docker-volume
+      imagePullSecrets:
+        - name: regsecret
       volumes:
         - name: docker-volume
           hostPath:

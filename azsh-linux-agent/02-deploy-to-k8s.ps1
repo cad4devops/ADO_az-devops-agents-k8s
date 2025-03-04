@@ -37,6 +37,22 @@ kubectl create namespace $namespace --dry-run=client -o yaml | kubectl apply -f 
 # get namespace
 kubectl get namespace $namespace
 
+# Create a secret for the docker registry
+$dockerRegistryServer = "cragentssgvhe4aipy37o.azurecr.io"
+$dockerUser = "cragentssgvhe4aipy37o"
+$dockerPassword = az acr credential show --name $dockerRegistryServer --query "passwords[0].value" -o tsv
+echo $dockerPassword
+
+kubectl create secret docker-registry regsecret `
+    --docker-server=$dockerRegistryServer `
+    --docker-username=$dockerUser `
+    --docker-password=$dockerPassword `
+    --namespace=$namespace
+
+# double check the secret
+kubectl get secret regsecret -n $namespace -o jsonpath="{.data.\.dockerconfigjson}" # | base64 --decode > config.json
+cat config.json
+
 kubectl apply -f $yamlDeploymentFile
 kubectl apply -f $yamlSecretFile
 
