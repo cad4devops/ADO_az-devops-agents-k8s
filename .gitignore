@@ -3,7 +3,8 @@
 ##
 ## Get latest from `dotnet new gitignore`
 
-azsh-linux-agent-secret.yaml
+linux-sh-agent-secret.yaml
+windows-sh-agent-secret.yaml
 config.json
 
 # dotenv files
