@@ -7,6 +7,9 @@ docker build --tag "${repositoryName}:${your_tag}" `
     --tag "${containerRegistryName}/${repositoryName}:latest" `
     --file "./Dockerfile.${repositoryName}" .
 
+# login to azure container registry
+az acr login --name $containerRegistryName
+
 # Push to your registry in azure
 docker push "${containerRegistryName}/${repositoryName}:${your_tag}"
 docker push "${containerRegistryName}/${repositoryName}:latest"
