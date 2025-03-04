@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: azsh-windows
+  namespace: __NAMESPACE__
+  labels:
+    app: azsh-windows-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: azsh-windows-agent
+  template:
+    metadata:
+      labels:
+        app: azsh-windows-agent
+    spec:
+      containers:
+        - name: kubepodcreation
+          image: cragentssgvhe4aipy37o.azurecr.io/windows-sh-agent:latest
+          env:
+            - name: AZP_URL
+              valueFrom:
+                secretKeyRef:
+                  name: azdevops
+                  key: AZP_URL
+            - name: AZP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: azdevops
+                  key: AZP_TOKEN
+            - name: AZP_POOL
+              valueFrom:
+                secretKeyRef:
+                  name: azdevops
+                  key: AZP_POOL
+          volumeMounts:
+            - mountPath: /var/run/docker.sock
+              name: docker-volume
+      imagePullSecrets:
+        - name: regsecret
+      volumes:
+        - name: docker-volume
+          hostPath:
+            path: /var/run/docker.sock

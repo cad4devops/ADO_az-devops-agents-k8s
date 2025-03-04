@@ -1,6 +1,6 @@
 $your_tag = "windows-2025"
 $containerRegistryName = "cragentssgvhe4aipy37o.azurecr.io"
-$repositoryName = "azsh-windows-agent"
+$repositoryName = "windows-sh-agent"
 
 docker build --tag "${repositoryName}:${your_tag}" `
     --tag "${containerRegistryName}/${repositoryName}:${your_tag}" `
