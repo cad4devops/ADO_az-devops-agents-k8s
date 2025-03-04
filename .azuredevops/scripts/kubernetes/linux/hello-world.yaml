@@ -1,4 +1,4 @@
 steps:
-    -   bash: |
-            echo "Hello, Welcome to Anvesh World!"
-        displayName: 'Hello World'
+    - bash: |
+          echo "Hello, Welcome to DevOps ABCs World!"
+      displayName: "Hello World"

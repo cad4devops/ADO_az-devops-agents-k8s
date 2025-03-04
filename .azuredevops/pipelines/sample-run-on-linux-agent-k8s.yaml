@@ -11,18 +11,18 @@ resources:
       ref: main
 
 stages:
-- stage: Deploy
-  jobs:
-  - deployment: agentSetup
-    environment: test
-    displayName: 'Agent Setup'
-    strategy:
-        runOnce:
-          deploy:
-            steps:
-            #Branch Checkout
-            - checkout: self
-              persistCredentials: true
-            
-            # Hello World program
-            - template: /scripts/kubernetes/linux/hello-world.yaml@templates
+  - stage: Deploy
+    jobs:
+      - deployment: agentSetup
+        environment: test
+        displayName: "Agent Setup"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                #Branch Checkout
+                - checkout: self
+                  persistCredentials: true
+
+                # Hello World program
+                - template: .azuredevops/scripts/kubernetes/linux/hello-world.yaml@templates
