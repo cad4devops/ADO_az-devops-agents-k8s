@@ -50,9 +50,9 @@ kubectl create secret docker-registry regsecret `
     --docker-password=$dockerPassword `
     --namespace=$namespace
 
-# double check the secret
-kubectl get secret regsecret -n $namespace -o jsonpath="{.data.\.dockerconfigjson}" # | base64 --decode > config.json
-#cat config.json
+# # double check the secret
+# kubectl get secret regsecret -n $namespace -o jsonpath="{.data.\.dockerconfigjson}" # | base64 --decode > config.json
+# #cat config.json
 
 kubectl apply -f $yamlDeploymentFile
 kubectl apply -f $yamlSecretFile
