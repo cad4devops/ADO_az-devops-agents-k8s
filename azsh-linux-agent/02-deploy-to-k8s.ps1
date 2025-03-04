@@ -3,7 +3,7 @@ $yamlSecretFileTemplate = "azsh-linux-agent-secret.template.yaml"
 $yamlDeploymentFile = "azsh-linux-agent-deployment.yaml"
 $yamlDeploymentFileTemplate = "azsh-linux-agent-deployment.template.yaml"
 $kubeContext = "my-workload-cluster-007-admin@my-workload-cluster-007"
-$namespace = "az-devops"
+$namespace = "az-devops-linux"
 $poolName = "KubernetesPoolLinux"
 $azureDevOpsUrl = "https://dev.azure.com/cad4devops"
 
@@ -43,7 +43,6 @@ kubectl get namespace $namespace
 $dockerRegistryServer = "cragentssgvhe4aipy37o.azurecr.io"
 $dockerUser = "cragentssgvhe4aipy37o"
 $dockerPassword = az acr credential show --name $dockerRegistryServer --query "passwords[0].value" -o tsv
-echo $dockerPassword
 
 kubectl create secret docker-registry regsecret `
     --docker-server=$dockerRegistryServer `
@@ -53,7 +52,7 @@ kubectl create secret docker-registry regsecret `
 
 # double check the secret
 kubectl get secret regsecret -n $namespace -o jsonpath="{.data.\.dockerconfigjson}" # | base64 --decode > config.json
-cat config.json
+#cat config.json
 
 kubectl apply -f $yamlDeploymentFile
 kubectl apply -f $yamlSecretFile
