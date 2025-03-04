@@ -1,6 +1,6 @@
 trigger: none
 
-pool: agent-on-kubernetes
+pool: KubernetesPoolLinux #agent-on-kubernetes
 
 resources:
   repositories:
