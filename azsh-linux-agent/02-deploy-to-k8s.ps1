@@ -1,0 +1,1 @@
+azsh-linux-agent-secret.yaml 
