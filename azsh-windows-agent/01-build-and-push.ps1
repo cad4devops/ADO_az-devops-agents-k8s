@@ -1,6 +1,6 @@
 $your_tag = "yourtag"
 $containerRegistryName = "cragentssgvhe4aipy37o.azurecr.io"
-$repositoryName = "azsh-linux-agent"
+$repositoryName = "azsh-windows-agent"
 
 docker build --tag "${repositoryName}:${your_tag}" `
     --tag "${containerRegistryName}/${repositoryName}:${your_tag}" `
