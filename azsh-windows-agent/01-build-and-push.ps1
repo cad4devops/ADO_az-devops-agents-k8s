@@ -1,4 +1,4 @@
-$your_tag = "yourtag"
+$your_tag = "windows-2025"
 $containerRegistryName = "cragentssgvhe4aipy37o.azurecr.io"
 $repositoryName = "azsh-windows-agent"
 
