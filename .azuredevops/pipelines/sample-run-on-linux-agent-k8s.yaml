@@ -14,7 +14,7 @@ stages:
   - stage: Deploy
     jobs:
       - deployment: agentSetup
-        environment: ADO_test
+        environment: ADO_test_linux
         displayName: "Agent Setup"
         strategy:
           runOnce:
