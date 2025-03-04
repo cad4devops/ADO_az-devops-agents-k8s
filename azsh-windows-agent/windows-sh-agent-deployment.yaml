@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: azsh-windows
-  namespace: az-devops
+  namespace: az-devops-windows
   labels:
     app: azsh-windows-agent
 spec:
@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: kubepodcreation
-          image: anvesh35/azsh-windows-agent:1602204
+          image: cragentssgvhe4aipy37o.azurecr.io/windows-sh-agent:latest
           env:
             - name: AZP_URL
               valueFrom:
@@ -37,6 +37,8 @@ spec:
           volumeMounts:
             - mountPath: /var/run/docker.sock
               name: docker-volume
+      imagePullSecrets:
+        - name: regsecret
       volumes:
         - name: docker-volume
           hostPath:
