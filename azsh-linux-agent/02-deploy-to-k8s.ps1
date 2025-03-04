@@ -10,7 +10,9 @@ $azureDevOpsUrl = "https://dev.azure.com/cad4devops"
 # Replace the placeholder with the actual value
 $template = Get-Content $yamlSecretFileTemplate
 $template = $template -replace "__NAMESPACE__", $namespace
-$patTokenBase64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($env:AZURE_DEVOPS_EXT_PAT_SOURCE))
+# get environment variable
+$patToken = ${env:DevOps-Shield-ADO-PAT-TOKEN-TENANT-e21f4f7c-edfd-4ab7-88ae-a4acdf139685}
+$patTokenBase64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($patToken))
 $template = $template -replace "__PAT_TOKEN__", $patTokenBase64
 $poolNameBase64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($poolName))
 $template = $template -replace "__POOL_NAME__", $poolNameBase64
