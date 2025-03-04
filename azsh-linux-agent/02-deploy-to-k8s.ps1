@@ -6,6 +6,8 @@ $kubeContext = "my-workload-cluster-007-admin@my-workload-cluster-007"
 $namespace = "az-devops-linux"
 $poolName = "KubernetesPoolLinux"
 $azureDevOpsUrl = "https://dev.azure.com/cad4devops"
+$dockerRegistryServer = "cragentssgvhe4aipy37o.azurecr.io"
+$dockerUser = "cragentssgvhe4aipy37o"
 
 # Replace the placeholder with the actual value
 $template = Get-Content $yamlSecretFileTemplate
@@ -40,8 +42,6 @@ kubectl create namespace $namespace --dry-run=client -o yaml | kubectl apply -f 
 kubectl get namespace $namespace
 
 # Create a secret for the docker registry
-$dockerRegistryServer = "cragentssgvhe4aipy37o.azurecr.io"
-$dockerUser = "cragentssgvhe4aipy37o"
 $dockerPassword = az acr credential show --name $dockerRegistryServer --query "passwords[0].value" -o tsv
 
 kubectl create secret docker-registry regsecret `
