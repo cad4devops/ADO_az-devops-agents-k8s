@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: azsh-linux
-  namespace: az-devops
+  namespace: az-devops-linux
   labels:
     app: azsh-linux-agent
 spec:
@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: kubepodcreation
-          image: cragentssgvhe4aipy37o.azurecr.io/azsh-linux-agent:latest
+          image: cragentssgvhe4aipy37o.azurecr.io/linux-sh-agent:latest
           env:
             - name: AZP_URL
               valueFrom:
