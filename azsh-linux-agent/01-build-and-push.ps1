@@ -1,11 +1,12 @@
 $your_tag = "ubuntu-24.04"
 $containerRegistryName = "cragentssgvhe4aipy37o.azurecr.io"
 $repositoryName = "linux-sh-agent"
+$dockerFileName = "./Dockerfile.${repositoryName}"
 
 docker build --tag "${repositoryName}:${your_tag}" `
     --tag "${containerRegistryName}/${repositoryName}:${your_tag}" `
     --tag "${containerRegistryName}/${repositoryName}:latest" `
-    --file "./Dockerfile.${repositoryName}" .
+    --file "$dockerFileName" .
 
 # login to azure container registry
 az acr login --name $containerRegistryName
