@@ -7,7 +7,7 @@ resources:
     - repository: templates
       displayname: templates from devops
       type: git
-      name: selfhosted-agents-kubernetes/selfhosted-agents-on-k8s
+      name: Cad4DevOps/ADO_az-devops-agents-k8s
       ref: main
 
 stages:
@@ -38,4 +38,4 @@ stages:
                 azureSubscription: 'az-devops-selfhosted-agents-service-connection'
                 scriptType: 'bash'
                 scriptLocation: 'inlineScript'
-                inlineScript: 'echo "Hello, welcome to Anvesh World!"'
+                inlineScript: 'echo "Hello, welcome to DevOps ABCs World!"'
