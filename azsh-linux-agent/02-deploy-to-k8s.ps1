@@ -8,7 +8,7 @@ $poolName = "KubernetesPoolLinux"
 $azureDevOpsUrl = "https://dev.azure.com/cad4devops"
 $dockerRegistryServer = "cragentssgvhe4aipy37o.azurecr.io"
 $dockerUser = "cragentssgvhe4aipy37o"
-$imageName = "cragentssgvhe4aipy37o.azurecr.io/linux-sh-agent:latest"
+$imageName = "cragentssgvhe4aipy37o.azurecr.io/linux-sh-agent-docker:latest"
 
 # Replace the placeholder with the actual value
 $template = Get-Content $yamlSecretFileTemplate
