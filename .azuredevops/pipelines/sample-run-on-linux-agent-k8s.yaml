@@ -26,3 +26,14 @@ stages:
 
                 # Hello World program
                 - template: .azuredevops/scripts/kubernetes/linux/hello-world.yaml@templates
+
+                # test docker
+                - task: CmdLine@2
+                  displayName: test docker
+                  inputs:
+                    script: |
+                      echo Write your commands here
+                      
+                      echo Hello world
+                      
+                      docker -v
