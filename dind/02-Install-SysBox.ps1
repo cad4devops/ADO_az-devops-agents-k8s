@@ -18,14 +18,16 @@ kubectl get nodes -o wide | ForEach-Object {
     if ($node -ne "NAME") {
         Write-Output "Installing sysbox on node $node"        
         #Add labels to the target worker nodes
-        kubectl label nodes $node sysbox-install=yes
+        #kubectl label nodes $node sysbox-install=yes
+        # delete the label
+        kubectl label nodes $node sysbox-install-
     }
     else {
         Write-Output "Skipping node $node"
     }
 }
 
-kubectl apply -f sysbox-daemon.yaml
+#kubectl apply -f sysbox-daemon.yaml
 #Make sure the sysbox-deploy-k8s daemonset pods are up and runing without any errors.
 
 Write-Output "Verify the newly created pods and secrets status using below command."
