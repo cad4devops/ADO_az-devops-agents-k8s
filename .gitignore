@@ -5,6 +5,7 @@
 
 linux-sh-agent-secret.yaml
 windows-sh-agent-secret.yaml
+keda-secret.yaml
 config.json
 
 # dotenv files
