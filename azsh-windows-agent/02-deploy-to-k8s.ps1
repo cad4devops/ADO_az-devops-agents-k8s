@@ -8,6 +8,7 @@ $poolName = "KubernetesPoolWindows"
 $azureDevOpsUrl = "https://dev.azure.com/cad4devops"
 $dockerRegistryServer = "cragentssgvhe4aipy37o.azurecr.io"
 $dockerUser = "cragentssgvhe4aipy37o"
+$imageName = "cragentssgvhe4aipy37o.azurecr.io/windows-sh-agent:latest"
 
 # Replace the placeholder with the actual value
 $template = Get-Content $yamlSecretFileTemplate
@@ -27,6 +28,7 @@ $template | Set-Content $yamlSecretFile
 # Replace the placeholder with the actual value
 $template = Get-Content $yamlDeploymentFileTemplate
 $template = $template -replace "__NAMESPACE__", $namespace
+$template = $template -replace "__IMAGE_NAME__", $imageName
 
 # Write the updated content to the yaml file
 $template | Set-Content $yamlDeploymentFile

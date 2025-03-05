@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: kubepodcreation
-          image: cragentssgvhe4aipy37o.azurecr.io/windows-sh-agent:latest
+          image: __IMAGE_NAME__
           env:
             - name: AZP_URL
               valueFrom:
