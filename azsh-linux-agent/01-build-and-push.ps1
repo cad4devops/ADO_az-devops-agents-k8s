@@ -1,6 +1,6 @@
 $your_tag = "ubuntu-24.04"
 $containerRegistryName = "cragentssgvhe4aipy37o.azurecr.io"
-$repositoryName = "linux-sh-agent"
+$repositoryName = "linux-sh-agent-docker"
 $dockerFileName = "./Dockerfile.${repositoryName}"
 
 docker build --tag "${repositoryName}:${your_tag}" `
