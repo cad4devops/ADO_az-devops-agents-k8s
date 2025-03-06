@@ -1,5 +1,11 @@
 steps:
   - task: CmdLine@2
-    displayName: 'Run Hello World'
+    displayName: "Run Hello World"
     inputs:
-      script: 'echo Hello, World!'
+      script: "echo Hello, World!"
+  # powershell task to wait 30 seconds
+  - task: PowerShell@2
+    displayName: "Wait 30 seconds"
+    inputs:
+      targetType: "inline"
+      script: "Start-Sleep -Seconds 30"
