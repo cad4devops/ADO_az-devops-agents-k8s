@@ -27,9 +27,9 @@ foreach ($node in $nodes.items) {
             #     kubectl taint nodes $nodeName sku:NoSchedule-
             # } 
             # if key is sku, remove the taint
-            if ($taint.key -eq "sku") {
+            if ($taint.key -eq "os") {
                 Write-Output "  Removing taint $($taint.key)"
-                kubectl taint nodes $nodeName sku:NoSchedule-
+                kubectl taint nodes $nodeName os:NoSchedule-
             }
             else {
                 Write-Host "  No taints to remove"

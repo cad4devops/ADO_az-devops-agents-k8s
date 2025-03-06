@@ -16,7 +16,7 @@ spec:
         app: azsh-windows-agent
     spec:
       tolerations:
-        - key: "os"
+        - key: "sku"
           operator: "Equal"
           value: "windows"
           effect: "NoSchedule"

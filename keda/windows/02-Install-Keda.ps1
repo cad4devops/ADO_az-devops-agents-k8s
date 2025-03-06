@@ -37,6 +37,9 @@ $template = $template -replace "__NAMESPACE__", $namespace
 $template | Set-Content $kedaScaledObjectFile
 
 kubectl config use-context $kubeContext
+# create namespace if it does not exist
+kubectl create namespace $namespace -o yaml --dry-run=client | kubectl apply -f -
+
 kubectl apply -f $yamlSecretFile
 kubectl apply -f $triggerAuthFile
 kubectl apply -f $kedaScaledObjectFile
