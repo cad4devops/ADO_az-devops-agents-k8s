@@ -35,9 +35,9 @@ stages:
                   inputs:
                     script: |
                       echo Write your commands here
-                      
+
                       echo Hello world
-                      
+
                       docker -v
   - stage: Deploy2
     displayName: Deploy in Parallel 2
@@ -63,9 +63,9 @@ stages:
                   inputs:
                     script: |
                       echo Write your commands here
-                      
+
                       echo Hello world
-                      
+
                       docker -v
   - stage: Deploy3
     displayName: Deploy in Parallel 3
@@ -91,7 +91,7 @@ stages:
                   inputs:
                     script: |
                       echo Write your commands here
-                      
+
                       echo Hello world
-                      
+
                       docker -v
