@@ -1,6 +1,6 @@
 #https://medium.com/@muppedaanvesh/azure-devops-self-hosted-agents-on-kubernetes-part-3-6658d741b369
 
-$kubeContext = "my-workload-cluster-007-admin@my-workload-cluster-007"
+$kubeContext = "my-workload-cluster-008-admin@my-workload-cluster-008"
 $namespaceKeda = "keda"
 $namespacePrometheus = "prometheus-stack"
 $yamlSecretFileTemplate = "keda-secret.template.yaml"
