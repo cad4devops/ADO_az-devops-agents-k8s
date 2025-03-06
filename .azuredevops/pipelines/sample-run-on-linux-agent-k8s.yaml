@@ -11,7 +11,65 @@ resources:
       ref: main
 
 stages:
-  - stage: Deploy
+  - stage: Deploy1
+    displayName: Deploy in Parallel 1
+    dependsOn: []
+    jobs:
+      - deployment: agentSetup
+        environment: ADO_test_linux
+        displayName: "Agent Setup"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                #Branch Checkout
+                - checkout: self
+                  persistCredentials: true
+
+                # Hello World program
+                - template: .azuredevops/scripts/kubernetes/linux/hello-world.yaml@templates
+
+                # test docker
+                - task: CmdLine@2
+                  displayName: test docker
+                  inputs:
+                    script: |
+                      echo Write your commands here
+                      
+                      echo Hello world
+                      
+                      docker -v
+  - stage: Deploy2
+    displayName: Deploy in Parallel 2
+    dependsOn: []
+    jobs:
+      - deployment: agentSetup
+        environment: ADO_test_linux
+        displayName: "Agent Setup"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                #Branch Checkout
+                - checkout: self
+                  persistCredentials: true
+
+                # Hello World program
+                - template: .azuredevops/scripts/kubernetes/linux/hello-world.yaml@templates
+
+                # test docker
+                - task: CmdLine@2
+                  displayName: test docker
+                  inputs:
+                    script: |
+                      echo Write your commands here
+                      
+                      echo Hello world
+                      
+                      docker -v
+  - stage: Deploy3
+    displayName: Deploy in Parallel 3
+    dependsOn: []
     jobs:
       - deployment: agentSetup
         environment: ADO_test_linux
