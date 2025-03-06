@@ -16,12 +16,12 @@ spec:
         app: azsh-windows-agent
     spec:
       tolerations:
-        - key: "node.kubernetes.io/os"
-          operator: "Equal"
-          value: "windows"
-          effect: "NoSchedule"
+        - key: node.kubernetes.io/os
+          operator: Equal
+          value: windows
+          effect: NoSchedule
       nodeSelector:
-        "node.kubernetes.io/os": windows
+        kubernetes.io/os: windows
       containers:
         - name: kubepodcreation
           image: cragentssgvhe4aipy37o.azurecr.io/windows-sh-agent:latest
