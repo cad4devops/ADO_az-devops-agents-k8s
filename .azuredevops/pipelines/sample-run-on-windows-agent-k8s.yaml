@@ -2,12 +2,61 @@ trigger: none
 
 pool:
   name: KubernetesPoolWindows # agent-on-kubernetes
-  #vmImage: azsh-windows-6c599c9f48-n2hxt # Windows agent pool specified!!!
-  demands:
-    - Agent.Name -equals azsh-windows-6c599c9f48-n2hxt
+  # demands:
+  #   - Agent.Name -equals azsh-windows-6c599c9f48-n2hxt
 
 stages:
-  - stage: Deploy
+  - stage: Deploy1
+    displayName: Deploy in Parallel 1
+    dependsOn: []
+    jobs:
+      - deployment: agentSetup
+        environment: ADO_test_windows
+        displayName: "Agent Setup"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                #Hello World From CMDLINE
+                - template: ../scripts/kubernetes/windows/hello-world.yaml
+
+                #Print Hostname from CMDLINE
+                - template: ../scripts/kubernetes/windows/windows-hostname.yaml
+  - stage: Deploy2
+    displayName: Deploy in Parallel 2
+    dependsOn: []
+    jobs:
+      - deployment: agentSetup
+        environment: ADO_test_windows
+        displayName: "Agent Setup"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                #Hello World From CMDLINE
+                - template: ../scripts/kubernetes/windows/hello-world.yaml
+
+                #Print Hostname from CMDLINE
+                - template: ../scripts/kubernetes/windows/windows-hostname.yaml
+  - stage: Deploy3
+    displayName: Deploy in Parallel 3
+    dependsOn: []
+    jobs:
+      - deployment: agentSetup
+        environment: ADO_test_windows
+        displayName: "Agent Setup"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                #Hello World From CMDLINE
+                - template: ../scripts/kubernetes/windows/hello-world.yaml
+
+                #Print Hostname from CMDLINE
+                - template: ../scripts/kubernetes/windows/windows-hostname.yaml
+  - stage: Deploy4
+    displayName: Deploy in Parallel 4
+    dependsOn: []
     jobs:
       - deployment: agentSetup
         environment: ADO_test_windows
