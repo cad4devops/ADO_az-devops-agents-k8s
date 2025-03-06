@@ -2,7 +2,7 @@ apiVersion: keda.sh/v1alpha1
 kind: TriggerAuthentication
 metadata:
   name: pipeline-trigger-auth
-  namespace: az-devops-linux
+  namespace: az-devops-windows
 spec:
   secretTargetRef:
     - parameter: personalAccessToken

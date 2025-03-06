@@ -5,13 +5,13 @@ metadata:
   namespace: __NAMESPACE__
 spec:
   scaleTargetRef:
-    name: azsh-linux #Target agent deployment name
+    name: azsh-windows #Target agent deployment name
   minReplicaCount: 1
   maxReplicaCount: 5 #Maximum number of parallel instances
   triggers:
     - type: azure-pipelines
       metadata:
-        poolID: "12" #Replace with your agent pool ID
+        poolID: "11" #Replace with your agent pool ID
         organizationURLFromEnv: "AZP_URL"
       authenticationRef:
         name: pipeline-trigger-auth
