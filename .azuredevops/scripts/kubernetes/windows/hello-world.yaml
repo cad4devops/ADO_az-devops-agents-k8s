@@ -3,9 +3,9 @@ steps:
     displayName: "Run Hello World"
     inputs:
       script: "echo Hello, World!"
-  # powershell task to wait 30 seconds
+  # powershell task to wait 300 seconds
   - task: PowerShell@2
-    displayName: "Wait 30 seconds"
+    displayName: "Wait 300 seconds"
     inputs:
       targetType: "inline"
-      script: "Start-Sleep -Seconds 30"
+      script: "Start-Sleep -Seconds 300"
