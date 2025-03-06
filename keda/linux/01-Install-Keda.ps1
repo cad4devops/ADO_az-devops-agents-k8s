@@ -16,5 +16,5 @@ helm install keda kedacore/keda --namespace $namespaceKeda --create-namespace
 
 kubectl get all -n $namespaceKeda
 
-# Get the Prometheus server URL by running these commands in the same shell:
-kubectl port-forward -n $namespacePrometheus service/prometheus-stack-grafana 3000:80
+# # Get the Prometheus server URL by running these commands in the same shell:
+# kubectl port-forward -n $namespacePrometheus service/prometheus-stack-grafana 3000:80
