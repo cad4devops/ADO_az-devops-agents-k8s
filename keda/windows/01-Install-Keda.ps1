@@ -2,8 +2,6 @@
 
 $kubeContext = "my-workload-cluster-008-admin@my-workload-cluster-008"
 $namespaceKeda = "keda"
-$clusterName = "my-workload-windows-cluster-001"
-$nodePoolName = "win-pool-002"
 
 kubectl config use-context $kubeContext
 
