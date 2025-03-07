@@ -8,7 +8,8 @@ $poolName = "KubernetesPoolWindows"
 $azureDevOpsUrl = "https://dev.azure.com/cad4devops"
 $dockerRegistryServer = "cragentssgvhe4aipy37o.azurecr.io"
 $dockerUser = "cragentssgvhe4aipy37o"
-$imageName = "cragentssgvhe4aipy37o.azurecr.io/windows-sh-agent:latest"
+$windowsVersion = "2022"
+$imageName = "cragentssgvhe4aipy37o.azurecr.io/windows-sh-agent-${windowsVersion}:latest"
 
 # Replace the placeholder with the actual value
 $template = Get-Content $yamlSecretFileTemplate
