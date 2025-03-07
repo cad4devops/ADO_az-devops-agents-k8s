@@ -36,17 +36,17 @@ spec:
           - name: AZP_URL
             valueFrom:
               secretKeyRef:
-                name: {{ .Values.secret.name }}
+                name: {{ .Values.secretwindows.name }}
                 key: AZP_URL
           - name: AZP_TOKEN
             valueFrom:
               secretKeyRef:
-                name: {{ .Values.secret.name }}
+                name: {{ .Values.secretwindows.name }}
                 key: AZP_TOKEN
           - name: AZP_POOL
             valueFrom:
               secretKeyRef:
-                name: {{ .Values.secret.name }}
+                name: {{ .Values.secretwindows.name }}
                 key: AZP_POOL
         volumeMounts:
         - mountPath: /var/run/docker.sock
