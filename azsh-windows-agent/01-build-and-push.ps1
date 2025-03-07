@@ -1,7 +1,8 @@
-$your_tag = "windows-2022"
+$windowsVersion = "2022"
+$your_tag = "windows-${windowsVersion}"
 $containerRegistryName = "cragentssgvhe4aipy37o.azurecr.io"
-$repositoryName = "windows-sh-agent"
-$dockerFileName = "./Dockerfile.${repositoryName}-windows2022"
+$repositoryName = "windows-sh-agent-${windowsVersion}"
+$dockerFileName = "./Dockerfile.${repositoryName}-windows${windowsVersion}"
 
 docker build --tag "${repositoryName}:${your_tag}" `
     --tag "${containerRegistryName}/${repositoryName}:${your_tag}" `
