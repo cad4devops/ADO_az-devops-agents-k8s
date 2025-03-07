@@ -487,3 +487,4 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+/helm-charts-v2/az-selfhosted-agents/values.yaml
