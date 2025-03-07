@@ -59,6 +59,10 @@ $clusterNodeCountWindows = 3
 $nodePoolNameWindows = "workload-cluster-$instanceName-windows-pool-001"
 $nodeVmSizeWindows = "Standard_D2s_v3" #Standard_K8S3_v1
 
+$clusterNodeCountWindows2025 = 1
+$nodePoolNameWindows2025 = "workload-cluster-$instanceName-windows2025-pool-001"
+$nodeVmSizeWindows2025 = "Standard_D2s_v3" #Standard_K8S3_v1
+
 
 # New-AksHciCluster -name mycluster -nodePoolName nodepool1 -nodeCount 1 -nodeVmSize Standard_K8S3_v1 -osType Windows -osSku Windows2022
 New-AksHciCluster -name $clusterName `
@@ -75,6 +79,15 @@ New-AksHciNodePool -clusterName $clusterName `
     -vmSize $nodeVmSizeWindows `
     -osType Windows `
     -osSku Windows2022 `
+    -taints sku=windows:NoSchedule
+
+# windows 2025 pool
+New-AksHciNodePool -clusterName $clusterName `
+    -name $nodePoolNameWindows2025 `
+    -count $clusterNodeCountWindows2025 `
+    -vmSize $nodeVmSizeWindows2025 `
+    -osType Windows `
+    -osSku Windows2025 `
     -taints sku=windows:NoSchedule
 
 # end of working example

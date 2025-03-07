@@ -7,7 +7,7 @@ $namespace = "prometheus-stack"
 # Install Prometheus and Grafana using helm
 Write-Output "Install Prometheus and Grafana using helm"
 
-$kubeContext = "my-workload-cluster-008-admin@my-workload-cluster-008"
+$kubeContext = "workload-cluster-009-admin@workload-cluster-009"
 
 kubectl config use-context $kubeContext
 

@@ -1,6 +1,6 @@
 #https://medium.com/@muppedaanvesh/azure-devops-self-hosted-agents-on-kubernetes-part-3-6658d741b369
 
-#$kubeContext = "my-workload-cluster-008-admin@my-workload-cluster-008"
+#$kubeContext = "workload-cluster-009-admin@workload-cluster-009"
 $your_tag = "ubuntu-18.04"
 $containerRegistryName = "cragentssgvhe4aipy37o.azurecr.io"
 $repositoryName = "linux-sh-agent-dind"
