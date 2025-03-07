@@ -1,6 +1,7 @@
 $windowsVersions = @("2019", "2022", "2025")
 
 foreach ($windowsVersion in $windowsVersions) {
+    Write-Output "Building and pushing windows-${windowsVersion} image"
     $your_tag = "windows-${windowsVersion}"
     $containerRegistryName = "cragentssgvhe4aipy37o.azurecr.io"
     $repositoryName = "windows-sh-agent-${windowsVersion}"
