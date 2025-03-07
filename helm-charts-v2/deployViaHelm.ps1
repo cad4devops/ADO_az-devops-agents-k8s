@@ -7,4 +7,9 @@ kubectl create namespace $windowsNamespace --dry-run=client -o yaml | kubectl ap
 
 helm install az-selfhosted-agents ./az-selfhosted-agents `
     --set windows.enabled=true `
-    --set linux.enabled=true
+    --set linux.enabled=true `
+    --create-namespace `
+    --namespace $linuxNamespace
+
+# to uninstall
+# helm uninstall az-selfhosted-agents --namespace $linuxNamespace
