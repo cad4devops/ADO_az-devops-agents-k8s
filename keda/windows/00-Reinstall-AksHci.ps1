@@ -1,7 +1,7 @@
 # alternative
 # https://learn.microsoft.com/en-us/azure/aks/aksarc/kubernetes-walkthrough-powershell
 
-$instanceName = "008"
+$instanceName = "009" # change this to a unique value for your environment
 $networkName = "aks-default-network-$instanceName"
 $workingDir = "f:\\AksHCI$instanceName"
 $cloudConfigLocation = "f:\\AksHCI$instanceName\\Config"
@@ -40,10 +40,43 @@ az account set --subscription $subscriptionId
 az group create -n $resourceGroupName -l $location	
 Set-AksHciRegistration -subscriptionId $subscriptionId `
     -resourceGroupName $resourceGroupName `
-    -TenantId $tenantId
+    -TenantId $tenantId `
+    -UseDeviceAuthentication
 
 $VerbosePreference = "Continue" #before proceeding.
 
 Install-AksHci
+
+# now you can create a new workload cluster
+$clusterName = "workload-cluster-$instanceName"
+
+$clusterNodeCountLinux = 3
+$nodePoolNameLinux = "workload-cluster-$instanceName-linux-pool-001"
+$nodeVmSizeLinux = "Standard_D2s_v3" #Standard_K8S3_v1
+$k8sVersionLinux = "v1.29.4"
+
+$clusterNodeCountWindows = 3
+$nodePoolNameWindows = "workload-cluster-$instanceName-windows-pool-001"
+$nodeVmSizeWindows = "Standard_D2s_v3" #Standard_K8S3_v1
+$k8sVersionWindows = "v1.29.4"
+
+# New-AksHciCluster -name mycluster -nodePoolName nodepool1 -nodeCount 1 -nodeVmSize Standard_K8S3_v1 -osType Windows -osSku Windows2022
+
+New-AksHciCluster -name $clusterName `
+    -nodePoolName $nodePoolNameLinux `
+    -nodeCount $clusterNodeCountLinux `
+    -nodeVmSize $nodeVmSizeLinux `
+    -osType Linux `
+    -kubernetesVersion $k8sVersionLinux
+
+# New-AksHciNodePool -clusterName <cluster-name> -nodePoolNAme taintnp -count 1 -osType Windows -osSku Windows2022 -taints sku=Windows:NoSchedule
+New-AksHciNodePool -clusterName $clusterName `
+    -name $nodePoolNameWindows `
+    -count $clusterNodeCountWindows `
+    -nodeVmSize $nodeVmSizeWindows `
+    -osType Windows `
+    -kubernetesVersion $k8sVersionWindows `
+    -osSku Windows2022 `
+    -taints sku=windows:NoSchedule
 
 # end of working example
