@@ -3,6 +3,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ .Values.linux.deploy.name }}
+  namespace: {{ .Values.linuxNamespace }}
   labels:
     app: azsh-linux-agent
     {{- include "az-selfhosted-agents.labels" . | nindent 4 }}
@@ -43,6 +44,8 @@ spec:
         volumeMounts:
         - mountPath: /var/run/docker.sock
           name: docker-volume
+      imagePullSecrets:
+        - name: regsecret
       volumes:
       - name: docker-volume
         hostPath:
