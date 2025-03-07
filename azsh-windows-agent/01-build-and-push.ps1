@@ -1,17 +1,20 @@
-$windowsVersion = "2022"
-$your_tag = "windows-${windowsVersion}"
-$containerRegistryName = "cragentssgvhe4aipy37o.azurecr.io"
-$repositoryName = "windows-sh-agent-${windowsVersion}"
-$dockerFileName = "./Dockerfile.${repositoryName}-windows${windowsVersion}"
+$windowsVersions = @("2019", "2022", "2025")
 
-docker build --tag "${repositoryName}:${your_tag}" `
-    --tag "${containerRegistryName}/${repositoryName}:${your_tag}" `
-    --tag "${containerRegistryName}/${repositoryName}:latest" `
-    --file "$dockerFileName" .
+foreach ($windowsVersion in $windowsVersions) {
+    $your_tag = "windows-${windowsVersion}"
+    $containerRegistryName = "cragentssgvhe4aipy37o.azurecr.io"
+    $repositoryName = "windows-sh-agent-${windowsVersion}"
+    $dockerFileName = "./Dockerfile.${repositoryName}-windows${windowsVersion}"
 
-# login to azure container registry
-az acr login --name $containerRegistryName
+    docker build --tag "${repositoryName}:${your_tag}" `
+        --tag "${containerRegistryName}/${repositoryName}:${your_tag}" `
+        --tag "${containerRegistryName}/${repositoryName}:latest" `
+        --file "$dockerFileName" .
 
-# Push to your registry in azure
-docker push "${containerRegistryName}/${repositoryName}:${your_tag}"
-docker push "${containerRegistryName}/${repositoryName}:latest"
+    # login to azure container registry
+    az acr login --name $containerRegistryName
+
+    # Push to your registry in azure
+    docker push "${containerRegistryName}/${repositoryName}:${your_tag}"
+    docker push "${containerRegistryName}/${repositoryName}:latest"
+}
