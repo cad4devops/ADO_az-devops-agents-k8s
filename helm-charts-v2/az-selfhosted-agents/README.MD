@@ -5,8 +5,7 @@ Use the below command to install the respective agents in kuberenetes cluster.
 ```bash
 helm install az-selfhosted-agents ./az-selfhosted-agents \
     --set windows.enabled=false \
-    --set linux.enabled=false \
-    --set dind.enabled=true \
+    --set linux.enabled=true \
     --create-namespace -n az-devops
 ```  
 

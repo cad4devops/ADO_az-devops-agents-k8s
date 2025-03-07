@@ -3,7 +3,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ .Values.windows.deploy.name }}
-  namespace: az-devops
+  namespace: {{ .Values.windowsNamespace }}
   labels:
     app: azsh-windows-agent
     {{- include "az-selfhosted-agents.labels" . | nindent 4 }}
@@ -19,6 +19,13 @@ spec:
         app: azsh-windows-agent
         {{- include "az-selfhosted-agents.selectorLabels" . | nindent 8 }}
     spec:
+      tolerations:
+        - key: "sku"
+          operator: "Equal"
+          value: "windows"
+          effect: "NoSchedule"
+      nodeSelector:
+        kubernetes.io/os: windows
       containers:
       - name: {{ .Values.windows.deploy.container.name }}
         image: {{ .Values.windows.deploy.container.image }}
@@ -44,6 +51,8 @@ spec:
         volumeMounts:
         - mountPath: /var/run/docker.sock
           name: docker-volume
+      imagePullSecrets:
+        - name: regsecret
       volumes:
       - name: docker-volume
         hostPath:
