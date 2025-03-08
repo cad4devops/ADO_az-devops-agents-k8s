@@ -41,22 +41,31 @@ stages:
               steps:
                 - checkout: self
                   persistCredentials: true
+                # install prerequisites
+                - task: PowerShell@2
+                  displayName: "Install Prerequisites"
+                  inputs:
+                    targetType: "inline"
+                    script: |
+                      # install az cli
+                      az config set extension.dynamic_install_allow_preview=true
                 # kube login
                 - task: Kubernetes@1
                   displayName: "kube login"
                   inputs:
-                    connectionType: 'Kubernetes Service Connection'
-                    kubernetesServiceEndpoint: '$(kubernetesServiceEndpoint)'
-                    command: 'login'
+                    connectionType: "Kubernetes Service Connection"
+                    kubernetesServiceEndpoint: "$(kubernetesServiceEndpoint)"
+                    command: "login"
                 - task: Kubernetes@1
+                  displayName: "Get AKS Nodes"
                   inputs:
-                    connectionType: 'Kubernetes Service Connection'
-                    kubernetesServiceEndpoint: '$(kubernetesServiceEndpoint)'
-                    command: 'get'
-                    arguments: 'nodes -o wide'
-                    secretType: 'dockerRegistry'
-                    containerRegistryType: 'Azure Container Registry'
-                    outputFormat: 'none'
+                    connectionType: "Kubernetes Service Connection"
+                    kubernetesServiceEndpoint: "$(kubernetesServiceEndpoint)"
+                    command: "get"
+                    arguments: "nodes -o wide"
+                    secretType: "dockerRegistry"
+                    containerRegistryType: "Azure Container Registry"
+                    outputFormat: "none"
                 # powershell script to deploy agent pool on aks
                 - task: PowerShell@2
                   displayName: "Deploy Agent Pool on AKS"
