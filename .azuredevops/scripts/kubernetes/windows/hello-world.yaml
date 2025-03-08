@@ -2,7 +2,14 @@ steps:
   - task: CmdLine@2
     displayName: "Run Hello World"
     inputs:
-      script: "echo Hello, World!"
+      script: |
+        echo "Hello World"
+        echo "OS Version:"
+        ver
+        echo "System Information:"
+        systeminfo
+        echo "Hostname:"
+        hostname
   # powershell task to wait 300 seconds
   - task: PowerShell@2
     displayName: "Wait 300 seconds"
