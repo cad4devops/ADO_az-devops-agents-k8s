@@ -1,4 +1,3 @@
-{{- if .Values.windows.enabled }}
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
 metadata:
@@ -12,7 +11,7 @@ spec:
   triggers:
     - type: azure-pipelines
       metadata:
-        poolID: {{ .Values.poolID.windows }} #Replace with your agent pool ID
+        poolID: "{{ .Values.poolID.windows }}" #Replace with your agent pool ID
         organizationURLFromEnv: "AZP_URL"
       authenticationRef:
         name: pipeline-trigger-auth
