@@ -27,6 +27,12 @@ $tenantId = "a34c69c7-8959-474a-9690-e98bfb0b55c6"
 # working example for creating a new management cluster for AKS hybrid version​​​​ 1.0.25.10226
 Uninstall-AksHci
 
+# list all VMs in Hyper-V starting with "workload-cluster-0"
+Get-VM -Name "workload-cluster-0*" | Select-Object Name, State, Version, MemoryAssigned, ProcessorCount, PathName
+# delete all VMs in Hyper-V starting with "workload-cluster-0" prompting for confirmation
+Write-Output "Deleting all VMs in Hyper-V starting with 'workload-cluster-0*'..."
+Get-VM -Name "workload-cluster-0*" | Remove-VM -Force -Confirm:$true
+
 Write-Output "AksHci Uninstall complete. Please delete previous folder $workingDir . and all VMs in Hyper-V. Press any key to continue."
 # press any key to continue
 # pause and wait for user input
