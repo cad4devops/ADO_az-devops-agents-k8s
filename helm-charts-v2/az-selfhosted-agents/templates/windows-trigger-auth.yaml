@@ -1,8 +1,9 @@
+{{- if .Values.windows.enabled }}
 apiVersion: keda.sh/v1alpha1
 kind: TriggerAuthentication
 metadata:
   name: pipeline-trigger-auth
-  namespace: __NAMESPACE__
+  namespace: {{ .Values.windowsNamespace }}
 spec:
   secretTargetRef:
     - parameter: personalAccessToken
