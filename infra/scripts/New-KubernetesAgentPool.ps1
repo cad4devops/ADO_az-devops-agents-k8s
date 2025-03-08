@@ -6,7 +6,10 @@ param (
     [Parameter()]
     [string] $organizationUrl = "https://dev.azure.com/cad4devops",
     [Parameter(Mandatory = $false)]
-    [string]$instanceNumber = "001"    
+    [string]$instanceNumber = "001",
+    [Parameter(Mandatory = $false)]
+    [ValidateSet("Linux", "Windows")]
+    [string]  $osType = "Linux"
 )
 
 # get pat from environment variable
@@ -38,8 +41,8 @@ foreach ($pool in $agentPools) {
     Write-Output "-----------------------------"
 }
 # Create a new agent pool
-$poolName = "KubernetesLinuxPool${instanceNumber}"
-$poolDescription = "Kubernetes Linux Pool for $instanceNumber"
+$poolName = "Kubernetes${osType}Pool${instanceNumber}"
+$poolDescription = "Kubernetes ${osType} Pool for $instanceNumber"
 
 $headers = @{
     "Content-Type"  = "application/json"
