@@ -7,6 +7,9 @@ trigger: none
 pool:
   vmImage: "ubuntu-latest"
 
+variables:
+  - group: ADO_k8s_agent_pool_vars
+
 steps:
   - checkout: self
     persistCredentials: true
@@ -14,5 +17,7 @@ steps:
   - task: PowerShell@2
     displayName: "List Agent Pools"
     inputs:
-      filePath: 'infra/scripts/New-KubernetesAgentPool.ps1'
+      filePath: "infra/scripts/New-KubernetesAgentPool.ps1"
       pwsh: true
+    env:
+      AZURE_DEVOPS_EXT_PAT: $(AZURE_DEVOPS_EXT_PAT)
