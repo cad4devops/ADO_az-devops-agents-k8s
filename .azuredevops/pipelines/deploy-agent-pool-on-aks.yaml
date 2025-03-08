@@ -35,7 +35,8 @@ stages:
                 - task: PowerShell@2
                   displayName: "Deploy Agent Pool on AKS"
                   inputs:
-                    filePath: "infra/scripts/New-KubernetesAgentPool.ps1"
+                    filePath: 'infra/scripts/New-KubernetesAgentPool.ps1'
+                    arguments: '-organizationUrl $(System.CollectionUri) -instanceNumber $(instanceNumber)'
                     pwsh: true
                   env:
                     AZURE_DEVOPS_EXT_PAT: $(AZURE_DEVOPS_EXT_PAT)
