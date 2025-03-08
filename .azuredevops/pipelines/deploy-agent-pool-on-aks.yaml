@@ -14,5 +14,5 @@ steps:
   - task: PowerShell@2
     displayName: "List Agent Pools"
     inputs:
-      filePath: 'infra\scripts\New-KubernetesAgentPool.ps1'
+      filePath: 'infra/scripts/New-KubernetesAgentPool.ps1'
       pwsh: true
