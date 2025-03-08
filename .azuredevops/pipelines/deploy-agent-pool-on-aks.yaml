@@ -10,7 +10,15 @@ pool:
 steps:
   - checkout: self
     persistCredentials: true
-  - task: HelmInstaller@1
-    displayName: "Install Helm"
+  # powershell script to list agent pools
+  - task: PowerShell@2
+    displayName: "List Agent Pools"
     inputs:
-      helmVersionToInstall: "latest"
+      targetType: "inline"
+      script: |
+        $uri = "$(System.TeamFoundationCollectionUri)$(System.TeamProject)/_apis/distributedtask/queues?api-version=6.0-preview.1"
+        $headers = @{
+          Authorization = "Basic $(System.AccessToken)"
+        }
+        $response = Invoke-RestMethod -Uri $uri -Method Get -Headers $headers
+        Write-Host "##vso[task.setvariable variable=agentPools]$($response.value | ConvertTo-Json)"
