@@ -31,7 +31,7 @@ stages:
     jobs:
       - deployment: DeployAgentPool
         displayName: "Deploy Agent Pool on AKS"
-        environment: "ADO_k8s-agent-pool-${{ parameters.instanceNumber }}"
+        environment: "ADO_k8s-agent-pool-${{ parameters.osType }}${{ parameters.instanceNumber }}"
         strategy:
           runOnce:
             deploy:
