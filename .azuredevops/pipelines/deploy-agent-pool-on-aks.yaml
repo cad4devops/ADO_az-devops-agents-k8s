@@ -83,3 +83,9 @@ stages:
                     kubernetesServiceConnection: "$(kubernetesServiceEndpoint)"
                     command: "ls"
                     arguments: "--all-namespaces"
+                # script to install keda
+                - task: PowerShell@2
+                  displayName: "Install Keda"
+                  inputs:
+                    filePath: "infra/scripts/Install-Keda.ps1"
+                    pwsh: true
