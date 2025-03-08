@@ -1,6 +1,17 @@
 # alternative
 # https://learn.microsoft.com/en-us/azure/aks/aksarc/kubernetes-walkthrough-powershell
 
+# requires PowerShell 5.1 -- exit if requirement not met
+if ($PSVersionTable.PSVersion.Major -lt 5) {
+    Write-Host "PowerShell 5.1 or later is required. Please update PowerShell and try again."
+    exit
+}
+# also exit if powershell 7 is running
+if ($PSVersionTable.PSEdition -eq "Core") {
+    Write-Host "PowerShell 7 is not supported. Please use Windows PowerShell 5.1 and try again."
+    exit
+}
+
 $instanceName = "010" # change this to a unique value for your environment
 $windowsVersion = "2025" #2022
 $networkName = "aks-default-network-$instanceName"
