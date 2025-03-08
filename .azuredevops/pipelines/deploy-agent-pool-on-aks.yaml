@@ -12,6 +12,13 @@ parameters:
     type: string
     default: "001"
     displayName: "Instance Number"
+  - name: osType
+    type: string
+    default: "Linux"
+    displayName: "Agent Pool OS Type"
+    values:
+      - Linux
+      - Windows
 
 variables:
   - group: ADO_k8s_agent_pool_vars
@@ -36,7 +43,7 @@ stages:
                   displayName: "Deploy Agent Pool on AKS"
                   inputs:
                     filePath: "infra/scripts/New-KubernetesAgentPool.ps1"
-                    arguments: '-organizationUrl "$(System.CollectionUri)" -instanceNumber "$(instanceNumber)"'
+                    arguments: '-organizationUrl "$(System.CollectionUri)" -instanceNumber "$(instanceNumber)" -osType "${{ parameters.osType }}"'
                     pwsh: true
                   env:
                     AZURE_DEVOPS_EXT_PAT: $(AZURE_DEVOPS_EXT_PAT)
