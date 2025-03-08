@@ -79,7 +79,7 @@ stages:
                 - task: HelmDeploy@1
                   displayName: "helm list"
                   inputs:
-                    connectionType: 'Kubernetes Service Connection'
-                    kubernetesServiceConnection: '$(kubernetesServiceEndpoint)'
-                    command: 'ls'
-                    arguments: '--all-namespaces'
+                    connectionType: "Kubernetes Service Connection"
+                    kubernetesServiceConnection: "$(kubernetesServiceEndpoint)"
+                    command: "ls"
+                    arguments: "--all-namespaces"
