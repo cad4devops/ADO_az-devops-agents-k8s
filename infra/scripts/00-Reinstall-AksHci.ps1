@@ -143,4 +143,6 @@ Read-Host -Prompt "Press Enter to continue"
 Write-Output "Get Kubeconfig for $clusterName "
 Get-AksHciCredential -name $clusterName
 
+kubectl get nodes -o wide
+
 # end of working example
