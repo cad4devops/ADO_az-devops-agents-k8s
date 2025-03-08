@@ -5,7 +5,8 @@
 trigger: none
 
 pool:
-  vmImage: "ubuntu-latest"
+  #vmImage: "ubuntu-latest"
+  name: KubernetesPoolWindows
 
 parameters:
   - name: instanceNumber
@@ -24,6 +25,8 @@ variables:
   - group: ADO_k8s_agent_pool_vars
   - name: instanceNumber
     value: ${{ parameters.instanceNumber }}
+  - name: kubernetesServiceEndpoint
+    value: ADO_workload-cluster-012
 
 stages:
   - stage: DeployAgentPool
@@ -38,6 +41,22 @@ stages:
               steps:
                 - checkout: self
                   persistCredentials: true
+                # kube login
+                - task: Kubernetes@1
+                  displayName: "kube login"
+                  inputs:
+                    connectionType: 'Kubernetes Service Connection'
+                    kubernetesServiceEndpoint: '$(kubernetesServiceEndpoint)'
+                    command: 'login'
+                - task: Kubernetes@1
+                  inputs:
+                    connectionType: 'Kubernetes Service Connection'
+                    kubernetesServiceEndpoint: '$(kubernetesServiceEndpoint)'
+                    command: 'get'
+                    arguments: 'nodes -o wide'
+                    secretType: 'dockerRegistry'
+                    containerRegistryType: 'Azure Container Registry'
+                    outputFormat: 'none'
                 # powershell script to deploy agent pool on aks
                 - task: PowerShell@2
                   displayName: "Deploy Agent Pool on AKS"
