@@ -16,7 +16,7 @@ $tenantId = "a34c69c7-8959-474a-9690-e98bfb0b55c6"
 # working example for creating a new management cluster for AKS hybrid version​​​​ 1.0.25.10226
 Uninstall-AksHci
 
-Write-Output "AksHci Uninstall complete. Please delete previous folder $workingDir ."
+Write-Output "AksHci Uninstall complete. Please delete previous folder $workingDir . and all VMs in Hyper-V. Press any key to continue."
 # press any key to continue
 # pause and wait for user input
 Read-Host -Prompt "Press Enter to continue"
