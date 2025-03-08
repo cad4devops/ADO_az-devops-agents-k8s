@@ -23,6 +23,19 @@ $location = "eastus"
 $resourceGroupName = "rg-aks-hybrid-arc-mgmt-cluster-dev-$instanceName"
 $tenantId = "a34c69c7-8959-474a-9690-e98bfb0b55c6"
 
+# now you can create a new workload cluster
+$clusterName = "workload-cluster-$instanceName"
+
+$clusterNodeCountLinux = 3
+$nodePoolNameLinux = "workload-cluster-$instanceName-linux-pool-001"
+$nodeVmSizeLinux = "Standard_D2s_v3" #Standard_K8S3_v1
+$kubernetesVersion = "v1.29.4"
+
+$clusterNodeCountWindows = 3
+$nodePoolNameWindows = "workload-cluster-$instanceName-windows${windowsVersion}-pool-001"
+$nodeVmSizeWindows = "Standard_D2s_v3" #Standard_K8S3_v1
+$windowsOsSku = "Windows${windowsVersion}" #2022
+
 
 # working example for creating a new management cluster for AKS hybrid version​​​​ 1.0.25.10226
 Uninstall-AksHci
@@ -97,19 +110,6 @@ Write-Output "AksHci Installed. Ensure management cluster is created in Hyper-V.
 # press any key to continue
 # pause and wait for user input
 Read-Host -Prompt "Press Enter to continue"
-
-# now you can create a new workload cluster
-$clusterName = "workload-cluster-$instanceName"
-
-$clusterNodeCountLinux = 3
-$nodePoolNameLinux = "workload-cluster-$instanceName-linux-pool-001"
-$nodeVmSizeLinux = "Standard_D2s_v3" #Standard_K8S3_v1
-$kubernetesVersion = "v1.29.4"
-
-$clusterNodeCountWindows = 3
-$nodePoolNameWindows = "workload-cluster-$instanceName-windows${windowsVersion}-pool-001"
-$nodeVmSizeWindows = "Standard_D2s_v3" #Standard_K8S3_v1
-$windowsOsSku = "Windows${windowsVersion}" #2022
 
 
 # New-AksHciCluster -name mycluster -nodePoolName nodepool1 -nodeCount 1 -nodeVmSize Standard_K8S3_v1 -osType Windows -osSku Windows2022
