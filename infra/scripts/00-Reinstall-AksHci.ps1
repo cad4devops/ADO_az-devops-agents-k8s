@@ -139,4 +139,8 @@ Write-Output "AksHci Node Pool created. Verify Hyper-V for $nodePoolNameWindows 
 # pause and wait for user input
 Read-Host -Prompt "Press Enter to continue"
 
+# get kubeconfig
+Write-Output "Get Kubeconfig for $clusterName "
+Get-AksHciCredential -name $clusterName
+
 # end of working example
