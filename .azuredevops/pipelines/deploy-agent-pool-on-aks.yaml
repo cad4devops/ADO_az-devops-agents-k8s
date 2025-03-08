@@ -45,10 +45,11 @@ stages:
                 - task: PowerShell@2
                   displayName: "Install Prerequisites"
                   inputs:
-                    targetType: "inline"
+                    targetType: 'inline'
                     script: |
                       # install az cli
                       az config set extension.dynamic_install_allow_preview=true
+                    pwsh: true
                 # kube login
                 - task: Kubernetes@1
                   displayName: "kube login"
