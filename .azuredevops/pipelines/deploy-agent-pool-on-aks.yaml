@@ -1,0 +1,16 @@
+# hello world pipeline
+# This pipeline deploys an agent pool on AKS
+# using the az-selfhosted-agents helm chart
+
+trigger: none
+
+pool:
+  vmImage: "ubuntu-latest"
+
+steps:
+  - checkout: self
+    persistCredentials: true
+  - task: HelmInstaller@1
+    displayName: "Install Helm"
+    inputs:
+      helmVersionToInstall: "latest"
