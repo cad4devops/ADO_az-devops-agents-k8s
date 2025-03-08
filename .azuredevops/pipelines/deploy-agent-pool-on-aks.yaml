@@ -49,6 +49,11 @@ stages:
                     script: |
                       # install az cli
                       az config set extension.dynamic_install_allow_preview=true
+                      # choco install base64
+                      if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
+                        iex ((New-Object System.Net.WebClient).DownloadString('https://chocolatey.org/install.ps1'))
+                      }
+                      choco install base64
                     pwsh: true
                 # kube login
                 - task: Kubernetes@1
