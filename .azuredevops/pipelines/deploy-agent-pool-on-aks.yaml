@@ -89,3 +89,10 @@ stages:
                   inputs:
                     filePath: "infra/scripts/Install-Keda.ps1"
                     pwsh: true
+                # script to install az-selfhosted-agents helm chart
+                - task: PowerShell@2
+                  displayName: "Install az-selfhosted-agents"
+                  inputs:
+                    filePath: "helm-charts-v2/deployViaHelm.ps1"
+                    arguments: '-organizationUrl "$(System.CollectionUri)" -instanceNumber "$(instanceNumber)" -osType "${{ parameters.osType }}"'
+                    pwsh: true
