@@ -93,7 +93,7 @@ stages:
                 - task: PowerShell@2
                   displayName: "Install az-selfhosted-agents"
                   inputs:
-                    filePath: 'helm-charts-v2/deployViaHelm.ps1'
+                    filePath: "helm-charts-v2/deployViaHelm.ps1"
                     arguments: '-instanceNumber "$(instanceNumber)"'
                     pwsh: true
-                    workingDirectory: '$(System.DefaultWorkingDirectory)/helm-charts-v2'
+                    workingDirectory: "$(System.DefaultWorkingDirectory)/helm-charts-v2"
