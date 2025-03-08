@@ -6,7 +6,7 @@ param (
     [Parameter()]
     [string] $organizationUrl = "https://dev.azure.com/cad4devops",
     [Parameter(Mandatory = $false)]
-    [string]$instanceName = "001"    
+    [string]$instanceNumber = "001"    
 )
 
 # get pat from environment variable
@@ -18,7 +18,7 @@ if (-not $pat) {
 
 # ech parameters
 Write-Output "Organization URL: $organizationUrl"
-Write-Output "Instance Name: $instanceName"
+Write-Output "Instance Number: $instanceNumber"
 # Set the Azure DevOps organization URL and personal access token (PAT)
 Write-Output "Using PAT: $($pat.Substring(0, 4))... (truncated for security)"
 # Set the Azure DevOps organization URL and personal access token (PAT)
@@ -38,8 +38,8 @@ foreach ($pool in $agentPools) {
     Write-Output "-----------------------------"
 }
 # Create a new agent pool
-$poolName = "KubernetesLinuxPool${instanceName}"
-$poolDescription = "Kubernetes Linux Pool for $instanceName"
+$poolName = "KubernetesLinuxPool${instanceNumber}"
+$poolDescription = "Kubernetes Linux Pool for $instanceNumber"
 
 $headers = @{
     "Content-Type"  = "application/json"
@@ -59,8 +59,20 @@ Write-Output "Request URL: $url"
 Write-Output "Request Body: $body"
 # Make the API call to create the agent pool
 try {
-    $response = Invoke-RestMethod -Uri $url -Method Post -Headers $headers -Body $body
-    Write-Output "Agent pool created successfully."
+    # Check if the agent pool already exists
+    $existingPool = $agentPools | Where-Object { $_.name -eq $poolName }
+    if ($existingPool) {
+        Write-Output "Agent pool '$poolName' already exists. Skipping creation."
+        #exit 0
+    }
+    else {
+        Write-Output "Agent pool '$poolName' does not exist. Proceeding with creation."
+    
+        $response = Invoke-RestMethod -Uri $url -Method Post -Headers $headers -Body $body
+        Write-Output "Agent pool created successfully."
+        Write-Output "Agent Pool ID: $($response.id)"
+        Write-Output "Agent Pool Name: $($response.name)"
+    }
 }
 catch {
     Write-Error "Failed to create agent pool: $_"

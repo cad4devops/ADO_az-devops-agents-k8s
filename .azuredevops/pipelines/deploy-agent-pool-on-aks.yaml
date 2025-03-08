@@ -7,17 +7,35 @@ trigger: none
 pool:
   vmImage: "ubuntu-latest"
 
+parameters:
+  - name: instanceNumber
+    type: string
+    default: "001"
+    displayName: "Instance Number"
+
 variables:
   - group: ADO_k8s_agent_pool_vars
+  - name: instanceNumber
+    value: ${{ parameters.instanceNumber }}
 
-steps:
-  - checkout: self
-    persistCredentials: true
-  # powershell script to list agent pools
-  - task: PowerShell@2
-    displayName: "List Agent Pools"
-    inputs:
-      filePath: "infra/scripts/New-KubernetesAgentPool.ps1"
-      pwsh: true
-    env:
-      AZURE_DEVOPS_EXT_PAT: $(AZURE_DEVOPS_EXT_PAT)
+stages:
+  - stage: DeployAgentPool
+    displayName: "Deploy Agent Pool on AKS"
+    jobs:
+      - deployment: DeployAgentPool
+        displayName: "Deploy Agent Pool on AKS"
+        environment: "ADO_k8s-agent-pool-${{ parameters.instanceNumber }}"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+                  persistCredentials: true
+                # powershell script to deploy agent pool on aks
+                - task: PowerShell@2
+                  displayName: "Deploy Agent Pool on AKS"
+                  inputs:
+                    filePath: "infra/scripts/New-KubernetesAgentPool.ps1"
+                    pwsh: true
+                  env:
+                    AZURE_DEVOPS_EXT_PAT: $(AZURE_DEVOPS_EXT_PAT)
