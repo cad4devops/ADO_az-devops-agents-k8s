@@ -12,7 +12,7 @@ if ($PSVersionTable.PSEdition -eq "Core") {
     exit
 }
 
-$instanceName = "010" # change this to a unique value for your environment
+$instanceName = "012" # change this to a unique value for your environment
 $windowsVersion = "2025" #2022
 $networkName = "aks-default-network-$instanceName"
 $workingDir = "f:\\AksHCI$instanceName"
