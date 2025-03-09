@@ -107,7 +107,7 @@ stages:
                   displayName: "Install az-selfhosted-agents"
                   inputs:
                     filePath: "helm-charts-v2/deployViaHelm.ps1"
-                    arguments: '-instanceNumber "$(instanceNumber)" -organizationUrl "$(System.CollectionUri)" -linuxPoolName "$(linuxPoolName)" -windowsPoolName "$(windowsPoolName)"'
+                    arguments: '-instanceNumber "$(instanceNumber)" -organizationUrl "$(System.CollectionUri)" -linuxPoolName "$(linuxPoolName)" -windowsPoolName "$(windowsPoolName)" -dockerConfigJsonValueBase64 "$(dockerConfigJsonValueBase64)"'
                     pwsh: true
                     workingDirectory: "$(System.DefaultWorkingDirectory)/helm-charts-v2"
                   env:
