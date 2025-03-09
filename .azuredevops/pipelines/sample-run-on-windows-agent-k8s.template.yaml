@@ -5,8 +5,8 @@ parameters:
     displayName: "Windows Pool Name"
 
 stages:
-  - stage: DeployInParallel
-    displayName: "Deploy in Parallel"
+  - stage: DeployInParallelWindows
+    displayName: "Deploy in Parallel Windows"
     pool:
       name: ${{ parameters.windowsPoolName }}
       # demands:

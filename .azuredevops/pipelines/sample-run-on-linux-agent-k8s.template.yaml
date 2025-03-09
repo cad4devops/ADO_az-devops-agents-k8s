@@ -5,8 +5,8 @@ parameters:
     displayName: "Linux Pool Name"
 
 stages:
-  - stage: DeployInParallel
-    displayName: "Deploy in Parallel"
+  - stage: DeployInParallelLinux
+    displayName: "Deploy in Parallel Linux"
     pool:
       name: ${{ parameters.linuxPoolName }}
       # demands:
