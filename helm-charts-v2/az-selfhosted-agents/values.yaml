@@ -1,0 +1,102 @@
+# Default values for az-selfhosted-agents.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+linuxNamespace: az-devops-linux
+windowsNamespace: az-devops-windows
+
+# add pool ID for the agent pool per OS
+poolID:
+  linux: "x"
+  windows: "y"
+
+# Secret values which will be used to connect to Azure DevOps
+secretlinux:
+  name: azdevops
+  data:
+    AZP_POOL_VALUE: S3V*************************
+    AZP_TOKEN_VALUE: Q2x*************************************************************************************************************
+    AZP_URL_VALUE: aHR*****************************************
+
+# Secret values which will be used to connect to Azure DevOps
+secretwindows:
+  name: azdevops
+  data:
+    AZP_POOL_VALUE: S3V*************************
+    AZP_TOKEN_VALUE: Q2x*************************************************************************************************************
+    AZP_URL_VALUE: aHR*****************************************
+
+# regsecret values which will be used to pull the images from the private registry
+regsecret:
+  name: regsecret
+  data:
+    DOCKER_CONFIG_JSON_VALUE: eyJhd***************************************************************************************************************************************************************************************************************************************************************************************************************************************
+
+# Configuration for Linux Self-Hosted agents
+linux:
+  enabled: false
+  deploy:
+    name: azsh-linux-agent
+    replicas: 1
+    container:
+      name: linux-agent
+      image: cragentssgvhe4aipy37o.azurecr.io/linux-sh-agent-docker:latest
+      pullPolicy: IfNotPresent
+      resources:
+        {}
+        # We usually recommend not to specify default resources and to leave this as a conscious
+        # choice for the user. This also increases chances charts run on environments with little
+        # resources, such as Minikube. If you do want to specify resources, uncomment the following
+        # lines, adjust them as necessary, and remove the curly braces after 'resources:'.
+        # limits:
+        #   cpu: 100m
+        #   memory: 128Mi
+        # requests:
+        #   cpu: 100m
+        #   memory: 128Mi
+
+# Configuration for Windows Self-Hosted agents
+windows:
+  enabled: false
+  deploy:
+    name: azsh-windows-agent
+    replicas: 1
+    container:
+      name: windows-agent
+      image: cragentssgvhe4aipy37o.azurecr.io/windows-sh-agent-2022:latest
+      pullPolicy: IfNotPresent
+      resources:
+        {}
+        # We usually recommend not to specify default resources and to leave this as a conscious
+        # choice for the user. This also increases chances charts run on environments with little
+        # resources, such as Minikube. If you do want to specify resources, uncomment the following
+        # lines, adjust them as necessary, and remove the curly braces after 'resources:'.
+        # limits:
+        #   cpu: 100m
+        #   memory: 128Mi
+        # requests:
+        #   cpu: 100m
+        #   memory: 128Mi
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+podAnnotations: {}
+
+podSecurityContext:
+  {}
+  # fsGroup: 2000
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 80
+  # targetMemoryUtilizationPercentage: 80
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}

@@ -7,6 +7,7 @@ linux-sh-agent-secret.yaml
 windows-sh-agent-secret.yaml
 keda-secret.yaml
 config.json
+#/helm-charts-v2/az-selfhosted-agents/values.yaml
 
 # dotenv files
 .env
@@ -487,4 +488,4 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
-/helm-charts-v2/az-selfhosted-agents/values.yaml
+
