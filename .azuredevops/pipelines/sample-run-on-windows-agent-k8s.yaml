@@ -7,52 +7,8 @@ parameters:
     displayName: "Windows Pool Name"
 
 stages:
-  - stage: DeployInParallel
-    displayName: "Deploy in Parallel"
-    pool:
-      name: ${{ parameters.windowsPoolName }}
-      # demands:
-      #   - Agent.OS -equals Windows
-      #   - Agent.Name -equals $(Agent.Name)
-      #   - Agent.Version -equals $(Agent.Version)
-    jobs:
-      - job: parallelTest1
-        displayName: "Parallel Test 1"
-        steps:
-          #Hello World From CMDLINE
-          - template: ../scripts/kubernetes/windows/hello-world.yaml
-
-          #Print Hostname from CMDLINE
-          - template: ../scripts/kubernetes/windows/windows-hostname.yaml
-      - job: parallelTest2
-        displayName: "Parallel Test 2"
-        steps:
-          #Hello World From CMDLINE
-          - template: ../scripts/kubernetes/windows/hello-world.yaml
-
-          #Print Hostname from CMDLINE
-          - template: ../scripts/kubernetes/windows/windows-hostname.yaml
-      - job: parallelTest3
-        displayName: "Parallel Test 3"
-        steps:
-          #Hello World From CMDLINE
-          - template: ../scripts/kubernetes/windows/hello-world.yaml
-
-          #Print Hostname from CMDLINE
-          - template: ../scripts/kubernetes/windows/windows-hostname.yaml
-      - job: parallelTest4
-        displayName: "Parallel Test 4"
-        steps:
-          #Hello World From CMDLINE
-          - template: ../scripts/kubernetes/windows/hello-world.yaml
-
-          #Print Hostname from CMDLINE
-          - template: ../scripts/kubernetes/windows/windows-hostname.yaml
-      - job: parallelTest5
-        displayName: "Parallel Test 5"
-        steps:
-          #Hello World From CMDLINE
-          - template: ../scripts/kubernetes/windows/hello-world.yaml
-
-          #Print Hostname from CMDLINE
-          - template: ../scripts/kubernetes/windows/windows-hostname.yaml
+  - template: sample-run-on-windows-agent-k8s.template.yaml
+    parameters:
+      windowsPoolName: ${{ parameters.windowsPoolName }}
+      stageName: "DeployInParallelWindows"
+      stageDisplayName: "Deploy in Parallel Windows (${{ parameters.windowsPoolName }})"
