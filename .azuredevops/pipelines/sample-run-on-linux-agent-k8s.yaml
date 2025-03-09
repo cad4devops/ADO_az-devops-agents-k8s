@@ -6,13 +6,13 @@ parameters:
     default: "KubernetesLinuxPool001"
     displayName: "Linux Pool Name"
 
-resources:
-  repositories:
-    - repository: templates
-      displayname: templates from devops
-      type: git
-      name: Cad4DevOps/ADO_az-devops-agents-k8s
-      ref: main
+# resources:
+#   repositories:
+#     - repository: templates
+#       displayname: templates from devops
+#       type: git
+#       name: Cad4DevOps/ADO_az-devops-agents-k8s
+#       ref: main
 
 stages:
   - stage: DeployInParallel
@@ -32,7 +32,7 @@ stages:
             persistCredentials: true
 
           # Hello World program
-          - template: .azuredevops/scripts/kubernetes/linux/hello-world.yaml@templates
+          - template: ../scripts/kubernetes/linux/hello-world.yaml #@templates
 
           # test docker
           - task: CmdLine@2
@@ -52,7 +52,7 @@ stages:
             persistCredentials: true
 
           # Hello World program
-          - template: .azuredevops/scripts/kubernetes/linux/hello-world.yaml@templates
+          - template: ../scripts/kubernetes/linux/hello-world.yaml #@templates
 
           # test docker
           - task: CmdLine@2
@@ -72,7 +72,7 @@ stages:
             persistCredentials: true
 
           # Hello World program
-          - template: .azuredevops/scripts/kubernetes/linux/hello-world.yaml@templates
+          - template: ../scripts/kubernetes/linux/hello-world.yaml #@templates
 
           # test docker
           - task: CmdLine@2
@@ -92,7 +92,7 @@ stages:
             persistCredentials: true
 
           # Hello World program
-          - template: .azuredevops/scripts/kubernetes/linux/hello-world.yaml@templates
+          - template: ../scripts/kubernetes/linux/hello-world.yaml #@templates
 
           # test docker
           - task: CmdLine@2
@@ -112,7 +112,7 @@ stages:
             persistCredentials: true
 
           # Hello World program
-          - template: .azuredevops/scripts/kubernetes/linux/hello-world.yaml@templates
+          - template: ../scripts/kubernetes/linux/hello-world.yaml #@templates
 
           # test docker
           - task: CmdLine@2
