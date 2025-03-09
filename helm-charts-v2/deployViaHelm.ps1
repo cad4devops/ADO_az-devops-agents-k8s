@@ -22,7 +22,10 @@ param (
     $organizationUrl = "https://dev.azure.com/cad4devops",
     [Parameter(Mandatory = $true)]
     [string]
-    $dockerConfigJsonValueBase64
+    $dockerConfigJsonValueBase64,
+    [Parameter(Mandatory = $false)]
+    [string]
+    $helmReleaseName = "az-selfhosted-agents-$instanceNumber"
 )
 
 # get pat from environment variable
@@ -39,6 +42,7 @@ Write-Output "Instance Number: $instanceNumber"
 Write-Output "Using PAT: $($pat.Substring(0, 3))... (truncated for security)"
 # docker config json value
 $dockerConfigJsonValue = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($dockerConfigJsonValueBase64))
+Write-Output "Helm Release Name: $helmReleaseName"
 
 Write-Output "Linux Namespace: $linuxNamespace"
 Write-Output "Windows Namespace: $windowsNamespace"
@@ -64,26 +68,33 @@ $windowsPoolId = az pipelines pool list --query "[?name=='$windowsPoolName'].id"
 Write-Output "Linux Pool ID: $linuxPoolId"
 Write-Output "Windows Pool ID: $windowsPoolId"
 
-Write-Output "Creating namespaces if not exists"
-kubectl create namespace $linuxNamespace --dry-run=client -o yaml | kubectl apply -f -
-kubectl create namespace $windowsNamespace --dry-run=client -o yaml | kubectl apply -f -
+# check if helm chart is already installed
+$helmInstalled = helm list -n $linuxNamespace | Select-String -Pattern "$helmReleaseName"
+if ($helmInstalled) {
+    Write-Output "Helm chart $helmReleaseName is already installed. Skipping..."
+    #helm uninstall $helmReleaseName --namespace $linuxNamespace
+}
+else {
+    Write-Output "Helm chart $helmReleaseName is not installed. Installing..."
 
-helm install az-selfhosted-agents ./az-selfhosted-agents `
-    --set windows.enabled=true `
-    --set windowsNamespace=$windowsNamespace `
-    --set secretwindows.data.AZP_TOKEN_VALUE=$patBase64 `
-    --set secretwindows.data.AZP_POOL_VALUE=$windowsPoolNameBase64 `
-    --set secretwindows.data.AZP_URL_VALUE=$organizationUrlBase64 `
-    --set poolID.windows=$windowsPoolId `
-    --set linux.enabled=true `
-    --set linuxNamespace=$linuxNamespace `
-    --set secretlinux.data.AZP_TOKEN_VALUE=$patBase64 `
-    --set secretlinux.data.AZP_POOL_VALUE=$linuxPoolNameBase64 `
-    --set secretlinux.data.AZP_URL_VALUE=$organizationUrlBase64 `
-    --set regsecret.data.DOCKER_CONFIG_JSON_VALUE=$dockerConfigJsonValueBase64 `
-    --set poolID.linux=$linuxPoolId `
-    --create-namespace `
-    --namespace $linuxNamespace
+    Write-Output "Creating namespaces if not exists"
+    kubectl create namespace $linuxNamespace --dry-run=client -o yaml | kubectl apply -f -
+    kubectl create namespace $windowsNamespace --dry-run=client -o yaml | kubectl apply -f -
 
-# to uninstall
-# helm uninstall az-selfhosted-agents --namespace $linuxNamespace
+    helm install $helmReleaseName ./az-selfhosted-agents `
+        --set windows.enabled=true `
+        --set windowsNamespace=$windowsNamespace `
+        --set secretwindows.data.AZP_TOKEN_VALUE=$patBase64 `
+        --set secretwindows.data.AZP_POOL_VALUE=$windowsPoolNameBase64 `
+        --set secretwindows.data.AZP_URL_VALUE=$organizationUrlBase64 `
+        --set poolID.windows=$windowsPoolId `
+        --set linux.enabled=true `
+        --set linuxNamespace=$linuxNamespace `
+        --set secretlinux.data.AZP_TOKEN_VALUE=$patBase64 `
+        --set secretlinux.data.AZP_POOL_VALUE=$linuxPoolNameBase64 `
+        --set secretlinux.data.AZP_URL_VALUE=$organizationUrlBase64 `
+        --set regsecret.data.DOCKER_CONFIG_JSON_VALUE=$dockerConfigJsonValueBase64 `
+        --set poolID.linux=$linuxPoolId `
+        --create-namespace `
+        --namespace $linuxNamespace
+}
