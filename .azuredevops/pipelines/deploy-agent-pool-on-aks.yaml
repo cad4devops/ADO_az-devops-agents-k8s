@@ -27,6 +27,14 @@ variables:
     value: ${{ parameters.instanceNumber }}
   - name: kubernetesServiceEndpoint
     value: ADO_workload-cluster-012
+  - name: linuxPoolName
+    value: KubernetesLinuxPool${{ parameters.instanceNumber }}
+  - name: windowsPoolName
+    value: KubernetesWindowsPool${{ parameters.instanceNumber }}
+  - name: linuxNamespace
+    value: az-devops-linux-${{ parameters.instanceNumber }}
+  - name: windowsNamespace
+    value: az-devops-windows-${{ parameters.instanceNumber }}
 
 stages:
   - stage: DeployAgentPool
@@ -99,6 +107,6 @@ stages:
                   displayName: "Install az-selfhosted-agents"
                   inputs:
                     filePath: "helm-charts-v2/deployViaHelm.ps1"
-                    arguments: '-instanceNumber "$(instanceNumber)"'
+                    arguments: '-instanceNumber "$(instanceNumber)" -organizationUrl "$(System.CollectionUri)" -linuxPoolName "$(linuxPoolName)" -windowsPoolName "$(windowsPoolName)"'
                     pwsh: true
                     workingDirectory: "$(System.DefaultWorkingDirectory)/helm-charts-v2"

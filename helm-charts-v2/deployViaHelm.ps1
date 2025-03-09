@@ -19,7 +19,10 @@ param (
     $windowsPoolName = "KubernetesPoolWindows",
     [Parameter()]
     [string]
-    $organizationUrl = "https://dev.azure.com/cad4devops"
+    $organizationUrl = "https://dev.azure.com/cad4devops",
+    [Parameter(Mandatory = $true)]
+    [string]
+    $dockerConfigJsonValueBase64
 )
 
 # get pat from environment variable
@@ -33,12 +36,15 @@ if (-not $pat) {
 Write-Output "Organization URL: $organizationUrl"
 Write-Output "Instance Number: $instanceNumber"
 # Set the Azure DevOps organization URL and personal access token (PAT)
-Write-Output "Using PAT: $($pat.Substring(0, 4))... (truncated for security)"
+Write-Output "Using PAT: $($pat.Substring(0, 3))... (truncated for security)"
+# docker config json value
+$dockerConfigJsonValue = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($dockerConfigJsonValueBase64))
 
 Write-Output "Linux Namespace: $linuxNamespace"
 Write-Output "Windows Namespace: $windowsNamespace"
 Write-Output "Linux Pool Name: $linuxPoolName"
 Write-Output "Windows Pool Name: $windowsPoolName"
+Write-Output "Docker Config JSON Value: $($dockerConfigJsonValue.Substring(0, 50))... (truncated for security)"
 
 # convert the pool name to base64
 $linuxPoolNameBase64 = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($linuxPoolName))
@@ -50,8 +56,15 @@ Write-Output "Linux Pool Name Base64: $linuxPoolNameBase64"
 Write-Output "Windows Pool Name Base64: $windowsPoolNameBase64"
 Write-Output "Organization URL Base64: $organizationUrlBase64"
 # truncated for security
-Write-Output "PAT Base64: $($patBase64.Substring(0, 4))... (truncated for security)"
+Write-Output "PAT Base64: $($patBase64.Substring(0, 3))... (truncated for security)"
 
+Write-Output "Getting pool ids from linux and windows agent pools"
+$linuxPoolId = az pipelines pool list --query "[?name=='$linuxPoolName'].id" -o tsv
+$windowsPoolId = az pipelines pool list --query "[?name=='$windowsPoolName'].id" -o tsv
+Write-Output "Linux Pool ID: $linuxPoolId"
+Write-Output "Windows Pool ID: $windowsPoolId"
+
+Write-Output "Creating namespaces if not exists"
 kubectl create namespace $linuxNamespace --dry-run=client -o yaml | kubectl apply -f -
 kubectl create namespace $windowsNamespace --dry-run=client -o yaml | kubectl apply -f -
 
@@ -60,10 +73,13 @@ helm install az-selfhosted-agents ./az-selfhosted-agents `
     --set secretwindows.data.AZP_TOKEN_VALUE=$patBase64 `
     --set secretwindows.data.AZP_POOL_VALUE=$windowsPoolNameBase64 `
     --set secretwindows.data.AZP_URL_VALUE=$organizationUrlBase64 `
+    --set poolID.windows=$windowsPoolId `
     --set linux.enabled=true `
     --set secretlinux.data.AZP_TOKEN_VALUE=$patBase64 `
     --set secretlinux.data.AZP_POOL_VALUE=$linuxPoolNameBase64 `
     --set secretlinux.data.AZP_URL_VALUE=$organizationUrlBase64 `
+    --set regsecret.data.DOCKER_CONFIG_JSON_VALUE=$dockerConfigJsonValueBase64 `
+    --set poolID.linux=$linuxPoolId `
     --create-namespace `
     --namespace $linuxNamespace
 
