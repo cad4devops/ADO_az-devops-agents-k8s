@@ -23,7 +23,7 @@ stages:
       #   - Agent.Version -equals $(Agent.Version)
     jobs:
       - job: parallelTest1
-        displayName: "Parallel Test 1"
+        displayName: "Windows Parallel Test 1"
         steps:
           #Hello World From CMDLINE
           - template: ../scripts/kubernetes/windows/hello-world.yaml
@@ -31,7 +31,7 @@ stages:
           #Print Hostname from CMDLINE
           - template: ../scripts/kubernetes/windows/windows-hostname.yaml
       - job: parallelTest2
-        displayName: "Parallel Test 2"
+        displayName: "Windows Parallel Test 2"
         steps:
           #Hello World From CMDLINE
           - template: ../scripts/kubernetes/windows/hello-world.yaml
@@ -39,7 +39,7 @@ stages:
           #Print Hostname from CMDLINE
           - template: ../scripts/kubernetes/windows/windows-hostname.yaml
       - job: parallelTest3
-        displayName: "Parallel Test 3"
+        displayName: "Windows Parallel Test 3"
         steps:
           #Hello World From CMDLINE
           - template: ../scripts/kubernetes/windows/hello-world.yaml
@@ -47,7 +47,7 @@ stages:
           #Print Hostname from CMDLINE
           - template: ../scripts/kubernetes/windows/windows-hostname.yaml
       - job: parallelTest4
-        displayName: "Parallel Test 4"
+        displayName: "Windows Parallel Test 4"
         steps:
           #Hello World From CMDLINE
           - template: ../scripts/kubernetes/windows/hello-world.yaml
@@ -55,7 +55,7 @@ stages:
           #Print Hostname from CMDLINE
           - template: ../scripts/kubernetes/windows/windows-hostname.yaml
       - job: parallelTest5
-        displayName: "Parallel Test 5"
+        displayName: "Windows Parallel Test 5"
         steps:
           #Hello World From CMDLINE
           - template: ../scripts/kubernetes/windows/hello-world.yaml

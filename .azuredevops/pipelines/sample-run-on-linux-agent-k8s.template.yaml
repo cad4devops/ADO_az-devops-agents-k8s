@@ -23,7 +23,7 @@ stages:
       #   - Agent.Version -equals $(Agent.Version)
     jobs:
       - job: parallelTest1
-        displayName: "Parallel Test 1"
+        displayName: "Linux Parallel Test 1"
         steps:
           #Branch Checkout
           - checkout: self
@@ -43,7 +43,7 @@ stages:
 
                 docker -v
       - job: parallelTest2
-        displayName: "Parallel Test 2"
+        displayName: "Linux Parallel Test 2"
         steps:
           #Branch Checkout
           - checkout: self
@@ -63,7 +63,7 @@ stages:
 
                 docker -v
       - job: parallelTest3
-        displayName: "Parallel Test 3"
+        displayName: "Linux Parallel Test 3"
         steps:
           #Branch Checkout
           - checkout: self
@@ -83,7 +83,7 @@ stages:
 
                 docker -v
       - job: parallelTest4
-        displayName: "Parallel Test 4"
+        displayName: "Linux Parallel Test 4"
         steps:
           #Branch Checkout
           - checkout: self
@@ -103,7 +103,7 @@ stages:
 
                 docker -v
       - job: parallelTest5
-        displayName: "Parallel Test 5"
+        displayName: "Linux Parallel Test 5"
         steps:
           #Branch Checkout
           - checkout: self
