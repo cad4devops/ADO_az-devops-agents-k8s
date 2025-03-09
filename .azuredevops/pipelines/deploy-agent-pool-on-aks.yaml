@@ -110,3 +110,5 @@ stages:
                     arguments: '-instanceNumber "$(instanceNumber)" -organizationUrl "$(System.CollectionUri)" -linuxPoolName "$(linuxPoolName)" -windowsPoolName "$(windowsPoolName)"'
                     pwsh: true
                     workingDirectory: "$(System.DefaultWorkingDirectory)/helm-charts-v2"
+                  env:
+                    AZURE_DEVOPS_EXT_PAT: $(AZURE_DEVOPS_EXT_PAT)
