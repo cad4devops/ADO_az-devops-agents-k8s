@@ -1,6 +1,17 @@
 trigger: none
 
-pool: KubernetesPoolLinux #agent-on-kubernetes
+parameters:
+  - name: linuxPoolName
+    type: string
+    default: "KubernetesLinuxPool001"
+    displayName: "Linux Pool Name"
+
+pool:
+  name: ${{ parameters.linuxPoolName }}
+  # demands:
+  #   - Agent.OS -equals Linux
+  #   - Agent.Name -equals $(Agent.Name)
+  #   - Agent.Version -equals $(Agent.Version)
 
 resources:
   repositories:
