@@ -1,9 +1,17 @@
 trigger: none
 
+parameters:
+  - name: windowsPoolName
+    type: string
+    default: "KubernetesWindowsPool001"
+    displayName: "Windows Pool Name"
+
 pool:
-  name: KubernetesPoolWindows # agent-on-kubernetes
+  name: ${{ parameters.windowsPoolName }}
   # demands:
-  #   - Agent.Name -equals azsh-windows-6c599c9f48-n2hxt
+  #   - Agent.OS -equals Windows
+  #   - Agent.Name -equals $(Agent.Name)
+  #   - Agent.Version -equals $(Agent.Version)
 
 stages:
   - stage: Deploy1
