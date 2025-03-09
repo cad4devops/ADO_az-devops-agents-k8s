@@ -35,6 +35,17 @@ if (-not $pat) {
     exit 1
 }
 
+# remove trailing slash from organization URL
+# check if the organization URL ends with a slash
+if ($organizationUrl.EndsWith("/")) {
+    # remove the trailing slash
+    Write-Output "Removing trailing slash from organization URL"
+    $organizationUrl = $organizationUrl.Substring(0, $organizationUrl.Length - 1)
+}
+else {
+    Write-Output "No trailing slash found in organization URL"
+}
+
 # ech parameters
 Write-Output "Organization URL: $organizationUrl"
 Write-Output "Instance Number: $instanceNumber"

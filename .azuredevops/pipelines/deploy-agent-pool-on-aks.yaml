@@ -112,3 +112,47 @@ stages:
                     workingDirectory: "$(System.DefaultWorkingDirectory)/helm-charts-v2"
                   env:
                     AZURE_DEVOPS_EXT_PAT: $(AZURE_DEVOPS_EXT_PAT)
+  - stage: TestLinuxAgentPool
+    displayName: "Test Linux Agent Pool"
+    dependsOn: DeployAgentPool
+    jobs:
+      - job: TestLinuxAgentPool
+        displayName: "Test Linux Agent Pool"
+        pool:
+          name: ${{ parameters.linuxPoolName }}
+          # demands:
+          #   - Agent.OS -equals Linux
+          #   - Agent.Name -equals $(Agent.Name)
+          #   - Agent.Version -equals $(Agent.Version)
+        steps:
+          # Hello World program
+          - template: .azuredevops/scripts/kubernetes/linux/hello-world.yaml@templates
+
+          # test docker
+          - task: CmdLine@2
+            displayName: test docker
+            inputs:
+              script: |
+                echo Write your commands here
+
+                echo Hello world
+
+                docker -v
+  - stage: TestWindowsAgentPool
+    displayName: "Test Windows Agent Pool"
+    dependsOn: DeployAgentPool
+    jobs:
+      - job: TestWindowsAgentPool
+        displayName: "Test Windows Agent Pool"
+        pool:
+          name: ${{ parameters.windowsPoolName }}
+          # demands:
+          #   - Agent.OS -equals Windows
+          #   - Agent.Name -equals $(Agent.Name)
+          #   - Agent.Version -equals $(Agent.Version)
+        steps:
+          #Hello World From CMDLINE
+          - template: ../scripts/kubernetes/windows/hello-world.yaml
+
+          #Print Hostname from CMDLINE
+          - template: ../scripts/kubernetes/windows/windows-hostname.yaml
