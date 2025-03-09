@@ -119,7 +119,7 @@ stages:
       - job: TestLinuxAgentPool
         displayName: "Test Linux Agent Pool"
         pool:
-          name: ${{ parameters.linuxPoolName }}
+          name: $(linuxPoolName)
           # demands:
           #   - Agent.OS -equals Linux
           #   - Agent.Name -equals $(Agent.Name)
@@ -145,7 +145,7 @@ stages:
       - job: TestWindowsAgentPool
         displayName: "Test Windows Agent Pool"
         pool:
-          name: ${{ parameters.windowsPoolName }}
+          name: $(windowsPoolName)
           # demands:
           #   - Agent.OS -equals Windows
           #   - Agent.Name -equals $(Agent.Name)
