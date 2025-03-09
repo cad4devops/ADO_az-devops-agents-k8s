@@ -115,10 +115,10 @@ stages:
   - template: sample-run-on-linux-agent-k8s.template.yaml
     parameters:
       linuxPoolName: ${{ variables.linuxPoolName }}
-      stageName: "DeployInParallelLinux ${{ variables.linuxPoolName }}"
+      stageName: "DeployInParallelLinux${{ variables.instanceNumber }}"
       stageDisplayName: "Deploy in Parallel Linux (${{ variables.linuxPoolName }})"
   - template: sample-run-on-windows-agent-k8s.template.yaml
     parameters:
       windowsPoolName: ${{ variables.windowsPoolName }}
-      stageName: "DeployInParallelWindows ${{ variables.windowsPoolName }}"
+      stageName: "DeployInParallelWindows${{ variables.instanceNumber }}"
       stageDisplayName: "Deploy in Parallel Windows (${{ variables.windowsPoolName }})"
