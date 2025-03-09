@@ -70,11 +70,13 @@ kubectl create namespace $windowsNamespace --dry-run=client -o yaml | kubectl ap
 
 helm install az-selfhosted-agents ./az-selfhosted-agents `
     --set windows.enabled=true `
+    --set windowsNamespace=$windowsNamespace `
     --set secretwindows.data.AZP_TOKEN_VALUE=$patBase64 `
     --set secretwindows.data.AZP_POOL_VALUE=$windowsPoolNameBase64 `
     --set secretwindows.data.AZP_URL_VALUE=$organizationUrlBase64 `
     --set poolID.windows=$windowsPoolId `
     --set linux.enabled=true `
+    --set linuxNamespace=$linuxNamespace `
     --set secretlinux.data.AZP_TOKEN_VALUE=$patBase64 `
     --set secretlinux.data.AZP_POOL_VALUE=$linuxPoolNameBase64 `
     --set secretlinux.data.AZP_URL_VALUE=$organizationUrlBase64 `
