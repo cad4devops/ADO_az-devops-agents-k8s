@@ -3,10 +3,18 @@ parameters:
     type: string
     default: "KubernetesWindowsPool001"
     displayName: "Windows Pool Name"
+  - name: stageName
+    type: string
+    default: "DeployInParallelWindows"
+    displayName: "Stage Name"
+  - name: stageDisplayName
+    type: string
+    default: "Deploy in Parallel Windows"
+    displayName: "Stage Display Name"
 
 stages:
-  - stage: DeployInParallelWindows
-    displayName: "Deploy in Parallel Windows"
+  - stage: ${{ parameters.stageName }}
+    displayName: ${{ parameters.stageDisplayName }}
     pool:
       name: ${{ parameters.windowsPoolName }}
       # demands:

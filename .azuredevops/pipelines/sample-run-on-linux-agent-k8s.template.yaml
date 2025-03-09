@@ -3,10 +3,18 @@ parameters:
     type: string
     default: "KubernetesLinuxPool001"
     displayName: "Linux Pool Name"
+  - name: stageName
+    type: string
+    default: "DeployInParallelLinux"
+    displayName: "Stage Name"
+  - name: stageDisplayName
+    type: string
+    default: "Deploy in Parallel Linux"
+    displayName: "Stage Display Name"
 
 stages:
-  - stage: DeployInParallelLinux
-    displayName: "Deploy in Parallel Linux"
+  - stage: ${{ parameters.stageName }}
+    displayName: ${{ parameters.stageDisplayName }}
     pool:
       name: ${{ parameters.linuxPoolName }}
       # demands:
