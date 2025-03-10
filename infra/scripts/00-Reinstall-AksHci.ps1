@@ -29,6 +29,7 @@ $clusterName = "workload-cluster-$instanceName"
 $clusterNodeCountLinux = 3
 $nodePoolNameLinux = "workload-cluster-$instanceName-linux-pool-001"
 $nodeVmSizeLinux = "Standard_D2s_v3" #Standard_K8S3_v1
+$linuxOsSku = "CBLMariner" # the only supported Linux OS SKU for AKS-HCI is CBLMariner
 $kubernetesVersion = "v1.29.4"
 
 $clusterNodeCountWindows = 3
@@ -118,6 +119,7 @@ New-AksHciCluster -name $clusterName `
     -nodeCount $clusterNodeCountLinux `
     -nodeVmSize $nodeVmSizeLinux `
     -osType Linux `
+    -osSku $linuxOsSku `
     -kubernetesVersion $kubernetesVersion
 
 Write-Output "AksHci Cluster created. Verify Hyper-V for $clusterName . Press any key to continue."
