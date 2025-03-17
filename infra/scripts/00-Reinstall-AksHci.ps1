@@ -37,8 +37,17 @@ $nodePoolNameWindows = "workload-cluster-$instanceName-windows${windowsVersion}-
 $nodeVmSizeWindows = "Standard_D2s_v3" #Standard_K8S3_v1
 $windowsOsSku = "Windows${windowsVersion}" #2022
 
+# after reboot of server VMs do not start automatically missing seed.iso
+
+# # reinstall modules Install the AksHci PowerShell module
+# # https://learn.microsoft.com/en-us/azure/aks/aksarc/kubernetes-walkthrough-powershell#install-the-akshci-powershell-module
+# Install-PackageProvider -Name NuGet -Force 
+# Install-Module -Name PowershellGet -Force -Confirm:$false
+
+# Install-Module -Name AksHci -Repository PSGallery -Force -AcceptLicense
 
 # working example for creating a new management cluster for AKS hybrid version​​​​ 1.0.25.10226
+# now at 1.0.25.10313 as of March 17 2025
 Uninstall-AksHci
 
 # list all VMs in Hyper-V starting with "workload-cluster-0"
@@ -122,6 +131,14 @@ New-AksHciCluster -name $clusterName `
     -osSku $linuxOsSku `
     -kubernetesVersion $kubernetesVersion
 
+# # If there's an issue
+# Remove-AksHciCluster -name $clusterName `
+#     -force
+# # Make sure that your cluster is deleted by looking at the existing VMs. If they are not deleted, then you can manually delete the VMs. 
+# #Then, run the command Restart-Service wssdagent. This should be done on each node in the failover cluster.
+
+# Restart-Service wssdagent
+
 Write-Output "AksHci Cluster created. Verify Hyper-V for $clusterName . Press any key to continue."
 # press any key to continue
 # pause and wait for user input
@@ -146,5 +163,32 @@ Write-Output "Get Kubeconfig for $clusterName "
 Get-AksHciCredential -name $clusterName
 
 kubectl get nodes -o wide
+
+# backup all the seed.iso files
+$seedIsoFiles = Get-ChildItem -Path "$imageDir" -Filter "seed.iso" -Recurse
+$backupDir = "f:\AksHCI$instanceName\seed_iso_backup"
+if (-not (Test-Path -Path $backupDir)) {
+    New-Item -ItemType Directory -Path $backupDir
+}
+foreach ($file in $seedIsoFiles) {
+    # add full path to the backup directory
+    # create the backup directory if it doesn't exist
+    # get full path of the file
+    $filePath = $file.FullName
+    $folderPath = Split-Path -Path $filePath -Parent
+
+    $folderPath = $folderPath.Substring($imageDir.Length - 1)
+    # remove the imageDir from the path
+    # remove the leading backslash from the path
+    #$folderPath = $folderPath.TrimStart("\")
+    # create the destination directory
+    $destination = Join-Path -Path $backupDir  -ChildPath $folderPath 
+    # create the destination directory if it doesn't exist
+    if (-not (Test-Path -Path $destination)) {
+        New-Item -ItemType Directory -Path $destination
+    }
+    Copy-Item -Path $file.FullName -Destination $destination -Force
+    Write-Output "Copied $($file.FullName) to $destination"
+}
 
 # end of working example
