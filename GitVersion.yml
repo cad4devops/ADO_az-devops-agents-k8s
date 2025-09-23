@@ -1,0 +1,10 @@
+mode: ContinuousDeployment
+next-version: 1.0.0
+branches:
+  main:
+    regex: ^main$
+    increment: Patch
+    source-branches: []
+ignore:
+  sha: []
+commit-message-incrementing: Enabled

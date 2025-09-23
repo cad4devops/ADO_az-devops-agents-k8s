@@ -1,0 +1,40 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: instanceNumber
+    type: string
+    default: "003"
+  - name: os
+    type: string
+    default: "linux"
+    values:
+      - linux
+      - windows
+  - name: stageName
+    type: string
+    default: "DeployInParallel"
+  - name: stageDisplayName
+    type: string
+    default: "Deploy in Parallel"
+
+stages:
+  - stage: ${{ parameters.stageName }}
+    displayName: ${{ parameters.stageDisplayName }}
+    jobs:
+      - job: RunParallelTests
+        displayName: "Run parallel tests on selected pool"
+        pool:
+          ${{ if eq(parameters.os, 'linux') }}:
+            name: KubernetesPoolLinux${{ parameters.instanceNumber }}
+          ${{ if eq(parameters.os, 'windows') }}:
+            name: KubernetesPoolWindows${{ parameters.instanceNumber }}
+        strategy:
+          parallel: 5
+        steps:
+          - checkout: self
+            persistCredentials: true
+          - ${{ if eq(parameters.os, 'linux') }}:
+              - template: ../scripts/kubernetes/linux/hello-world.yaml
+          - ${{ if eq(parameters.os, 'windows') }}:
+              - template: ../scripts/kubernetes/windows/hello-world.yaml

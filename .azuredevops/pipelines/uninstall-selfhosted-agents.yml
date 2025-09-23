@@ -1,0 +1,282 @@
+# Azure DevOps pipeline to uninstall / clean up self-hosted agent deployment
+# This reverses what deploy-selfhosted-agents.yml creates.
+# It will:
+#  * Optionally delete Linux & Windows Kubernetes namespaces (cascades deployments, pods, secrets)
+#  * Optionally delete Azure DevOps agent pools created (KubernetesPoolLinux<instance>, KubernetesPoolWindows<instance>)
+#  * Provide a safety confirmation gate
+#
+# Prerequisites:
+#  - Kubernetes service connection (parameter: kubernetesServiceConnection)
+#  - Variable group containing AZDO_PAT (same as deploy pipeline)
+#  - PAT must have permission to manage agent pools (Organization Settings > Security)
+#
+# Safety: You MUST set confirmDeletion to 'YES' (case sensitive) or the pipeline will abort.
+
+trigger: none
+pr: none
+
+parameters:
+  - name: removeLinux
+    type: boolean
+    default: true
+    displayName: Remove Linux namespace & resources
+  - name: removeWindows
+    type: boolean
+    default: true
+    displayName: Remove Windows namespace & resources
+  - name: deleteAgentPools
+    type: boolean
+    default: true
+    displayName: Delete corresponding Azure DevOps agent pools
+  - name: instanceNumber
+    type: string
+    default: "003"
+    displayName: Instance number suffix (e.g. 003)
+  - name: azureDevOpsOrgUrl
+    type: string
+    default: "https://dev.azure.com/cad4devops"
+  - name: kubernetesServiceConnection
+    type: string
+    default: "AKS_my-workload-cluster-dev-014-kubeconfig"
+    displayName: Kubernetes service connection name
+  - name: confirmDeletion
+    type: string
+    default: "YES"
+    displayName: Type YES to actually perform deletions
+
+pool:
+  name: KubernetesPoolWindows
+
+variables:
+  - group: ADO_az-devops-agents-k8s # provides AZDO_PAT
+
+stages:
+  - stage: Uninstall
+    displayName: Uninstall self-hosted agent resources
+    jobs:
+      - job: LinuxCleanup
+        displayName: Linux cleanup
+        condition: and(eq('${{ parameters.removeLinux }}','true'), ne('${{ parameters.confirmDeletion }}',''))
+        steps:
+          - checkout: none
+          - task: PowerShell@2
+            displayName: Validate confirmation (Linux)
+            inputs:
+              targetType: inline
+              pwsh: true
+              script: |
+                if('${{ parameters.confirmDeletion }}' -ne 'YES'){
+                  Write-Error "confirmDeletion parameter must be 'YES' to proceed. Current: '${{ parameters.confirmDeletion }}'"
+                } else { Write-Host 'Confirmation OK.' }
+          - task: Kubernetes@1
+            displayName: Delete Linux namespace
+            inputs:
+              connectionType: 'Kubernetes Service Connection'
+              kubernetesServiceEndpoint: ${{ parameters.kubernetesServiceConnection }}
+              command: delete
+              arguments: namespace az-devops-linux-${{ parameters.instanceNumber }} --ignore-not-found
+              secretType: 'dockerRegistry'
+              containerRegistryType: 'Azure Container Registry'
+              outputFormat: none
+          # (REST-only) Delete Linux agent pool step kept below
+
+          - task: PowerShell@2
+            displayName: Delete Linux agent pool (optional)
+            condition: and(succeededOrFailed(), eq('${{ parameters.deleteAgentPools }}','true'))
+            env:
+              AZDO_PAT: $(AZDO_PAT)
+            inputs:
+              targetType: inline
+              pwsh: true
+              script: |
+                $ErrorActionPreference='Stop'
+                $org='${{ parameters.azureDevOpsOrgUrl }}'
+                $org = $org.TrimEnd('/')
+                # ensure no trailing slash (keeps URI concatenation predictable)
+                $org = $org.TrimEnd('/')
+                $instance='${{ parameters.instanceNumber }}'
+                if([string]::IsNullOrWhiteSpace($instance)){ $instance='003' }
+                $poolName = "KubernetesPoolLinux$instance"
+                $pat=$env:AZDO_PAT; if(-not $pat){ throw 'AZDO_PAT missing' }
+                $auth='Basic ' + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(':'+ $pat))
+                $apiV='7.1-preview.1'
+                $getUri = $org + "/_apis/distributedtask/pools?poolName=" + [Uri]::EscapeDataString($poolName) + "&api-version=" + $apiV
+                Write-Host "Checking pool $poolName"
+                # Get pool by name (search)
+                try{
+                  $resp = Invoke-RestMethod -Method Get -Uri $getUri -Headers @{Authorization=$auth; Accept='application/json'} -ErrorAction Stop
+                } catch {
+                  Write-Warning "Initial search for pool failed: $($_.Exception.Message)"
+                  throw
+                }
+                if($resp.count -eq 0){ Write-Host "Pool $poolName not found (nothing to delete)."; return }
+                $id=$resp.value[0].id
+                Write-Host "Discovered pool $poolName (id=$id)"
+
+                function Invoke-DeleteWithRetry($poolId){
+                  $delUri = $org + "/_apis/distributedtask/pools/" + $poolId + "?api-version=" + $apiV
+                  Write-Host "Attempting DELETE $delUri"
+                  try{
+                    $d = Invoke-WebRequest -Method Delete -Uri $delUri -Headers @{ Authorization = $auth; Accept = 'application/json' } -UseBasicParsing -ErrorAction Stop
+                    Write-Host "Deleted pool id=$poolId (status $($d.StatusCode))"
+                    return $true
+                  } catch {
+                      if($_.Exception.Response){
+                        $resp = $_.Exception.Response
+                        $status = $null
+                        $body = $null
+                        try{ $status = $resp.StatusCode.value__ } catch {}
+                        try{ $body = $resp.Content.ReadAsStringAsync().Result } catch {}
+                        if(-not $body){ try{ $body = (New-Object System.IO.StreamReader($resp.GetResponseStream())).ReadToEnd() } catch {} }
+                        Write-Warning "DELETE returned $status for pool id=$poolId"
+                        if($body){ Write-Host "Response body: $body" }
+                        return $status
+                      } else { throw }
+                  }
+                }
+
+                # First attempt
+                $res = Invoke-DeleteWithRetry $id
+                if($res -eq $true){ return }
+                if($res -is [int] -and $res -eq 404){
+                  Write-Warning "Delete by id returned 404. Re-listing pools to find matching name/id and retrying."
+                  try{
+                    $listUri = $org + "/_apis/distributedtask/pools?api-version=" + $apiV
+                    $list = Invoke-RestMethod -Method Get -Uri $listUri -Headers @{ Authorization = $auth; Accept = 'application/json' } -ErrorAction Stop
+                    Write-Host "Pools list retrieved (count=$($list.count))"
+                  } catch {
+                    Write-Warning "Failed to list pools for diagnosis: $($_.Exception.Message)"
+                    throw
+                  }
+                  # Try to find a pool with exact name match
+                  $match = $list.value | Where-Object { $_.name -eq $poolName } | Select-Object -First 1
+                        if(-not $match){ Write-Warning "No pool with name '$poolName' found in list. Nothing to delete."; Write-Host "Pools list content: $(ConvertTo-Json $list -Depth 4)"; return }
+                  if($res2 -is [int]){ Write-Warning "Retry delete returned HTTP $res2. See pools list for details."; Write-Host "Pool entry: $(ConvertTo-Json $match -Depth 4)"; return }
+                }
+                elseif($res -is [int] -and $res -eq 409){ Write-Warning "Pool delete conflict (409) - it may be in use or already deleting."; return }
+                else { Write-Error "Pool delete failed with unexpected result: $res"; return }
+
+      - job: WindowsCleanup
+        displayName: Windows cleanup
+        condition: and(eq('${{ parameters.removeWindows }}','true'), ne('${{ parameters.confirmDeletion }}',''))
+        steps:
+          - checkout: none
+          - task: PowerShell@2
+            displayName: Validate confirmation (Windows)
+            inputs:
+              targetType: inline
+              pwsh: true
+              script: |
+                if('${{ parameters.confirmDeletion }}' -ne 'YES'){
+                  Write-Error "confirmDeletion parameter must be 'YES' to proceed. Current: '${{ parameters.confirmDeletion }}'"
+                } else { Write-Host 'Confirmation OK.' }
+          - task: Kubernetes@1
+            displayName: Delete Windows namespace
+            inputs:
+              connectionType: 'Kubernetes Service Connection'
+              kubernetesServiceEndpoint: ${{ parameters.kubernetesServiceConnection }}
+              command: delete
+              arguments: namespace az-devops-windows-${{ parameters.instanceNumber }} --ignore-not-found
+              secretType: 'dockerRegistry'
+              containerRegistryType: 'Azure Container Registry'
+              outputFormat: none
+          # (REST-only) Delete Windows agent pool step kept below
+
+          - task: PowerShell@2
+            displayName: Delete Windows agent pool (optional)
+            condition: and(succeededOrFailed(), eq('${{ parameters.deleteAgentPools }}','true'))
+            env:
+              AZDO_PAT: $(AZDO_PAT)
+            inputs:
+              targetType: inline
+              pwsh: true
+              script: |
+                $ErrorActionPreference='Stop'
+                $org='${{ parameters.azureDevOpsOrgUrl }}'
+                $instance='${{ parameters.instanceNumber }}'
+                if([string]::IsNullOrWhiteSpace($instance)){ $instance='003' }
+                $poolName = "KubernetesPoolWindows$instance"
+                $pat=$env:AZDO_PAT; if(-not $pat){ throw 'AZDO_PAT missing' }
+                $auth='Basic ' + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(':'+ $pat))
+                $apiV='7.1-preview.1'
+                $getUri = $org + "/_apis/distributedtask/pools?poolName=" + [Uri]::EscapeDataString($poolName) + "&api-version=" + $apiV
+                Write-Host "Checking pool $poolName"
+                try{
+                  $resp = Invoke-RestMethod -Method Get -Uri $getUri -Headers @{Authorization=$auth; Accept='application/json'} -ErrorAction Stop
+                } catch {
+                  Write-Warning "Initial search for pool failed: $($_.Exception.Message)"
+                  throw
+                }
+                if($resp.count -eq 0){ Write-Host "Pool $poolName not found (nothing to delete)."; return }
+                $id=$resp.value[0].id
+                Write-Host "Discovered pool $poolName (id=$id)"
+
+                function Invoke-DeleteWithRetry($poolId){
+                  $delUri = $org + "/_apis/distributedtask/pools/" + $poolId + "?api-version=" + $apiV
+                  Write-Host "Attempting DELETE $delUri"
+                  try{
+                    $d = Invoke-WebRequest -Method Delete -Uri $delUri -Headers @{ Authorization = $auth; Accept = 'application/json' } -UseBasicParsing -ErrorAction Stop
+                    Write-Host "Deleted pool id=$poolId (status $($d.StatusCode))"
+                    return $true
+                  } catch {
+                    if($_.Exception.Response){
+                      $resp = $_.Exception.Response
+                      $status = $null
+                      $body = $null
+                      try{ $status = $resp.StatusCode.value__ } catch {}
+                      try{ $body = $resp.Content.ReadAsStringAsync().Result } catch {}
+                      if(-not $body){ try{ $body = (New-Object System.IO.StreamReader($resp.GetResponseStream())).ReadToEnd() } catch {} }
+                      Write-Warning "DELETE returned $status for pool id=$poolId"
+                      if($body){ Write-Host "Response body: $body" }
+                      return $status
+                    } else { throw }
+                  }
+                }
+
+                # First attempt
+                $res = Invoke-DeleteWithRetry $id
+                if($res -eq $true){ return }
+                if($res -is [int] -and $res -eq 404){
+                  Write-Warning "Delete by id returned 404. Re-listing pools to find matching name/id and retrying."
+                  try{
+                    $listUri = $org + "/_apis/distributedtask/pools?api-version=" + $apiV
+                    $list = Invoke-RestMethod -Method Get -Uri $listUri -Headers @{ Authorization = $auth; Accept = 'application/json' } -ErrorAction Stop
+                    Write-Host "Pools list retrieved (count=$($list.count))"
+                  } catch {
+                    Write-Warning "Failed to list pools for diagnosis: $($_.Exception.Message)"
+                    throw
+                  }
+                  $match = $list.value | Where-Object { $_.name -eq $poolName } | Select-Object -First 1
+                  if(-not $match){ Write-Warning "No pool with name '$poolName' found in list. Nothing to delete."; Write-Host "Pools list content: $(ConvertTo-Json $list -Depth 4)"; return }
+                  $newId = $match.id
+                  if($newId -eq $id){ Write-Warning "Pool id unchanged ($id) but delete still returned 404. Will not retry further."; Write-Host "Pool entry: $(ConvertTo-Json $match -Depth 4)"; return }
+                  Write-Host "Found pool by name in list with id=$newId. Retrying delete..."
+                  $res2 = Invoke-DeleteWithRetry $newId
+                  if($res2 -eq $true){ return }
+                  if($res2 -is [int]){ Write-Warning "Retry delete returned HTTP $res2. See pools list for details."; Write-Host "Pool entry: $(ConvertTo-Json $match -Depth 4)"; return }
+                }
+                elseif($res -is [int] -and $res -eq 409){ Write-Warning "Pool delete conflict (409) - it may be in use or already deleting."; return }
+                else { Write-Error "Pool delete failed with unexpected result: $res"; return }
+
+      - job: Summary
+        displayName: Uninstall Summary
+        dependsOn: [LinuxCleanup, WindowsCleanup]
+        condition: always()
+        steps:
+          - task: PowerShell@2
+            displayName: Summarize cleanup
+            inputs:
+              targetType: inline
+              pwsh: true
+              script: |
+                $instance='${{ parameters.instanceNumber }}'
+                $linuxNs = "az-devops-linux-$instance"
+                $winNs   = "az-devops-windows-$instance"
+                $removeLinux = '${{ parameters.removeLinux }}'
+                $removeWindows = '${{ parameters.removeWindows }}'
+                $deletePools = '${{ parameters.deleteAgentPools }}'
+                $lines = @('# Uninstall Summary', '',"Instance: $instance",'', 'Requested:', "- removeLinux: $removeLinux", "- removeWindows: $removeWindows", "- deleteAgentPools: $deletePools", '', 'Target Namespaces:', "- $linuxNs", "- $winNs")
+                $path = Join-Path $env:SYSTEM_DEFAULTWORKINGDIRECTORY uninstall-summary.md
+                $lines | Out-File $path -Encoding utf8
+                Write-Host "##vso[task.addattachment type=Distributedtask.Core.Summary;name=Uninstall Summary]$path"
+                $lines | ForEach-Object { Write-Host $_ }
