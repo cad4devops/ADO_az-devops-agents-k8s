@@ -1,0 +1,637 @@
+# Azure DevOps pipeline to deploy Linux and/or Windows self-hosted agent pools to AKS
+# This pipeline parameterizes the existing PowerShell scripts in azsh-linux-agent and azsh-windows-agent
+# It assumes the following service connections / variables exist:
+# - service connection: azureSubscription (for az CLI auth if needed)
+# - variable/secret: AZDO_PAT (ADO PAT)
+# - variable: KUBE_CONTEXT (optional override; otherwise default from scripts)
+# - variable: ACR_NAME (e.g. cragentssgvhe4aipy37o) if you want to override registry
+trigger: none
+pr: none
+
+parameters:
+  - name: deployLinux
+    displayName: Deploy Linux agents
+    type: boolean
+    default: true
+  - name: deployWindows
+    displayName: Deploy Windows agents
+    type: boolean
+    default: true
+  - name: windowsVersion
+    displayName: Windows agent base image version (2019|2022|2025)
+    type: string
+    default: "2022"
+  - name: linuxImageVariant
+    displayName: Linux image variant (docker|ubuntu22|dind etc.)
+    type: string
+    default: "docker"
+  - name: acrName
+    displayName: Azure Container Registry name (without .azurecr.io) override
+    type: string
+    default: "cragentssgvhe4aipy37o"
+  - name: azureDevOpsOrgUrl
+    type: string
+    default: "https://dev.azure.com/cad4devops"
+  - name: instanceNumber
+    displayName: Instance number suffix (e.g. 003)
+    type: string
+    default: "003"
+  - name: validateAgents
+    displayName: Validate deployed agents by running a test job
+    type: boolean
+    default: true
+  - name: bootstrapPoolName
+    displayName: Existing self-hosted pool to run deployment (leave blank to use Microsoft-hosted)
+    type: string
+    default: "KubernetesPoolWindows"
+
+# Removed static root pool definition so pipeline can start on Microsoft-hosted agents
+# Dynamic self-hosted pools are created and authorized during execution; test jobs later target them
+
+variables:
+  - group: ADO_az-devops-agents-k8s
+  - name: azureSubscription
+    value: ADO_SvcConnRgScopedProd
+
+stages:
+  - stage: Deploy
+    displayName: Deploy self-hosted agents
+    jobs:
+      - job: LinuxAgents
+        displayName: Deploy Linux Agents
+        condition: eq('${{ parameters.deployLinux }}', 'true')
+        pool:
+          ${{ if ne(parameters.bootstrapPoolName, '') }}:
+            name: ${{ parameters.bootstrapPoolName }}
+          ${{ if eq(parameters.bootstrapPoolName, '') }}:
+            vmImage: ubuntu-latest
+        steps:
+          - checkout: self
+          - task: PowerShell@2
+            name: EnsureLinuxPool
+            displayName: Ensure Linux agent pool exists
+            env:
+              AZDO_PAT: $(AZDO_PAT)
+            inputs:
+              targetType: inline
+              pwsh: true
+              script: |
+                Set-StrictMode -Version Latest
+                $ErrorActionPreference = 'Stop'
+                $pat = $env:AZDO_PAT
+                if([string]::IsNullOrWhiteSpace($pat)){ throw 'AZDO_PAT not provided' }
+                $orgUrl = '${{ parameters.azureDevOpsOrgUrl }}'
+                $instance = '${{ parameters.instanceNumber }}'
+                if([string]::IsNullOrWhiteSpace($instance)){ $instance = '003' }
+                $poolName = "KubernetesPoolLinux$instance"
+                $authHeader = 'Basic ' + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(':' + $pat))
+                $headers = @{ Authorization = $authHeader }
+                $encodedPool = [Uri]::EscapeDataString($poolName)
+                $apiVersion = '7.1-preview.1'
+                $getUri = "$orgUrl/_apis/distributedtask/pools?poolName=$encodedPool&api-version=$apiVersion"
+                Write-Host "Checking agent pool '$poolName' at $orgUrl"
+                $resp = Invoke-RestMethod -Method Get -Uri $getUri -Headers $headers -ErrorAction Stop
+                if($resp.count -gt 0){
+                  $poolId = $resp.value[0].id
+                  Write-Host "Pool '$poolName' already exists (id=$poolId)."
+                } else {
+                  Write-Host "Creating agent pool '$poolName'"
+                  $createUri = "$orgUrl/_apis/distributedtask/pools?api-version=$apiVersion"
+                  $body = @{ name = $poolName } | ConvertTo-Json -Compress
+                  $created = Invoke-RestMethod -Method Post -Uri $createUri -Headers ($headers + @{ 'Content-Type'='application/json' }) -Body $body -ErrorAction Stop
+                  $poolId = $created.id
+                  Write-Host "Created pool id=$poolId"
+                }
+                # Ensure queue (authorization) in current project
+                $project = $env:SYSTEM_TEAMPROJECT
+                if(-not $project){ throw 'SYSTEM_TEAMPROJECT variable not found' }
+                $queuesUri = "$orgUrl/$([Uri]::EscapeDataString($project))/_apis/distributedtask/queues?api-version=$apiVersion"
+                $queues = Invoke-RestMethod -Method Get -Uri $queuesUri -Headers $headers -ErrorAction Stop
+                if(-not ($queues.value | Where-Object { $_.pool.id -eq $poolId })){
+                  Write-Host "Authorizing pool '$poolName' (id=$poolId) for project '$project' by creating queue"
+                  $qBody = @{ name = $poolName; pool = @{ id = $poolId } } | ConvertTo-Json -Compress
+                  try {
+                    Invoke-RestMethod -Method Post -Uri $queuesUri -Headers ($headers + @{ 'Content-Type'='application/json' }) -Body $qBody -ErrorAction Stop | Out-Null
+                    Write-Host 'Queue created.'
+                  } catch {
+                    if($_.Exception.Response){
+                      $status = $_.Exception.Response.StatusCode.value__
+                      if($status -eq 409){ Write-Warning 'Queue already exists (409 conflict). Proceeding.' }
+                      else { throw }
+                    } else { throw }
+                  }
+                } else { Write-Host "Pool already authorized for project '$project'." }
+          - task: AzureCLI@2
+            name: DeployLinux
+            displayName: Template & Apply Linux Agents (auth via service connection)
+            env:
+              AZDO_PAT: $(AZDO_PAT)
+            inputs:
+              azureSubscription: $(azureSubscription)
+              scriptType: pscore
+              scriptLocation: inlineScript
+              failOnStandardError: true
+              inlineScript: |
+                Set-StrictMode -Version Latest
+                $ErrorActionPreference = 'Stop'
+                Set-Location azsh-linux-agent
+                $instance = '${{ parameters.instanceNumber }}'
+                if([string]::IsNullOrWhiteSpace($instance)){ $instance = '003' }
+                $linuxPool = "KubernetesPoolLinux$instance"
+                $orgUrl    = '${{ parameters.azureDevOpsOrgUrl }}'
+                $acrName   = '${{ parameters.acrName }}'
+                $variant   = '${{ parameters.linuxImageVariant }}'
+                if([string]::IsNullOrWhiteSpace($acrName)){ $acrName = 'cragentssgvhe4aipy37o' }
+                $registryServer = "$acrName.azurecr.io"
+                switch ($variant) {
+                  'ubuntu22' { $imageName = "$registryServer/linux-sh-agent-ubuntu22:latest" }
+                  'dind'     { $imageName = "$registryServer/linux-sh-agent-dind:latest" }
+                  default    { $imageName = "$registryServer/linux-sh-agent-docker:latest" }
+                }
+                $secretTemplate = 'linux-sh-agent-secret.template.yaml'
+                $secretOut      = 'linux-sh-agent-secret.yaml'
+                $deployTemplate = 'linux-sh-agent-deployment.template.yaml'
+                $deployOut      = 'linux-sh-agent-deployment.yaml'
+                $namespace = "az-devops-linux-$instance"
+                $patToken = $env:AZDO_PAT
+                if([string]::IsNullOrWhiteSpace($patToken)){ throw 'PAT token env variable not set' }
+                function To-B64($s){ [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($s)) }
+                $secret = (Get-Content $secretTemplate -Raw) -replace '__NAMESPACE__', $namespace
+                $secret = $secret -replace '__PAT_TOKEN__', (To-B64 $patToken)
+                $secret = $secret -replace '__POOL_NAME__', (To-B64 $linuxPool)
+                $secret = $secret -replace '__AZURE_DEVOPS_URL__', (To-B64 $orgUrl)
+                $secret = $secret -replace 'name:\s+linux-sh-agent-secret', ('name: linux-sh-agent-secret-' + $instance)
+                $secret | Set-Content $secretOut -Encoding utf8
+                $deploy = (Get-Content $deployTemplate -Raw) -replace '__NAMESPACE__', $namespace
+                $deploy = $deploy -replace '__IMAGE_NAME__', $imageName
+                $deploy = $deploy -replace 'name:\s+linux-sh-agent-deployment', ('name: linux-sh-agent-deployment-' + $instance)
+                $deploy | Set-Content $deployOut -Encoding utf8
+                az acr show -n $acrName --only-show-errors 1>$null
+                @(
+                  'apiVersion: v1'
+                  'kind: Namespace'
+                  'metadata:'
+                  "  name: $namespace"
+                ) | Set-Content namespace-linux.yaml -Encoding utf8
+                $dockerPassword = az acr credential show --name $acrName --query 'passwords[0].value' -o tsv
+                if(-not $dockerPassword){ throw 'Failed to retrieve ACR credentials' }
+                $auth = To-B64(('{0}:{1}' -f $acrName,$dockerPassword))
+                $cfgJson = @{
+                  auths = @{
+                    $registryServer = @{
+                      username = $acrName
+                      password = $dockerPassword
+                      auth     = $auth
+                    }
+                  }
+                } | ConvertTo-Json -Depth 4 -Compress
+                $cfgB64 = To-B64($cfgJson)
+                @(
+                  'apiVersion: v1'
+                  'kind: Secret'
+                  'metadata:'
+                  '  name: regsecret'
+                  "  namespace: $namespace"
+                  'type: kubernetes.io/dockerconfigjson'
+                  'data:'
+                  "  .dockerconfigjson: $cfgB64"
+                ) | Set-Content linux-regsecret.yaml -Encoding utf8
+          - task: KubernetesManifest@1
+            displayName: Apply Linux namespace
+            inputs:
+              action: deploy
+              kubernetesServiceConnection: AKS_my-workload-cluster-dev-014-kubeconfig
+              manifests: |
+                azsh-linux-agent/namespace-linux.yaml
+          - task: KubernetesManifest@1
+            displayName: Apply Linux regsecret
+            inputs:
+              action: deploy
+              kubernetesServiceConnection: AKS_my-workload-cluster-dev-014-kubeconfig
+              namespace: az-devops-linux-${{ parameters.instanceNumber }}
+              manifests: |
+                azsh-linux-agent/linux-regsecret.yaml
+          - task: KubernetesManifest@1
+            displayName: Apply Linux agent secret & deployment
+            inputs:
+              action: deploy
+              kubernetesServiceConnection: AKS_my-workload-cluster-dev-014-kubeconfig
+              namespace: az-devops-linux-${{ parameters.instanceNumber }}
+              manifests: |
+                azsh-linux-agent/linux-sh-agent-secret.yaml
+                azsh-linux-agent/linux-sh-agent-deployment.yaml
+          - task: PowerShell@2
+            name: ExportLinuxResult
+            displayName: Export Linux job result
+            inputs:
+              targetType: inline
+              pwsh: true
+              script: |
+                Write-Host "Linux job status: $env:AGENT_JOBSTATUS"
+                Write-Host "##vso[task.setvariable variable=JOB_RESULT;isOutput=true]$env:AGENT_JOBSTATUS"
+
+      - job: WindowsAgents
+        displayName: Deploy Windows Agents
+        condition: eq('${{ parameters.deployWindows }}', 'true')
+        pool:
+          ${{ if ne(parameters.bootstrapPoolName, '') }}:
+            name: ${{ parameters.bootstrapPoolName }}
+          ${{ if eq(parameters.bootstrapPoolName, '') }}:
+            vmImage: ubuntu-latest
+        steps:
+          - checkout: self
+          - task: PowerShell@2
+            name: EnsureWindowsPool
+            displayName: Ensure Windows agent pool exists
+            env:
+              AZDO_PAT: $(AZDO_PAT)
+            inputs:
+              targetType: inline
+              pwsh: true
+              script: |
+                Set-StrictMode -Version Latest
+                $ErrorActionPreference = 'Stop'
+                $pat = $env:AZDO_PAT
+                if([string]::IsNullOrWhiteSpace($pat)){ throw 'AZDO_PAT not provided' }
+                $orgUrl = '${{ parameters.azureDevOpsOrgUrl }}'
+                $instance = '${{ parameters.instanceNumber }}'
+                if([string]::IsNullOrWhiteSpace($instance)){ $instance = '003' }
+                $poolName = "KubernetesPoolWindows$instance"
+                $authHeader = 'Basic ' + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(':' + $pat))
+                $headers = @{ Authorization = $authHeader }
+                $encodedPool = [Uri]::EscapeDataString($poolName)
+                $apiVersion = '7.1-preview.1'
+                $getUri = "$orgUrl/_apis/distributedtask/pools?poolName=$encodedPool&api-version=$apiVersion"
+                Write-Host "Checking agent pool '$poolName' at $orgUrl"
+                $resp = Invoke-RestMethod -Method Get -Uri $getUri -Headers $headers -ErrorAction Stop
+                if($resp.count -gt 0){
+                  $poolId = $resp.value[0].id
+                  Write-Host "Pool '$poolName' already exists (id=$poolId)."
+                } else {
+                  Write-Host "Creating agent pool '$poolName'"
+                  $createUri = "$orgUrl/_apis/distributedtask/pools?api-version=$apiVersion"
+                  $body = @{ name = $poolName } | ConvertTo-Json -Compress
+                  $created = Invoke-RestMethod -Method Post -Uri $createUri -Headers ($headers + @{ 'Content-Type'='application/json' }) -Body $body -ErrorAction Stop
+                  $poolId = $created.id
+                  Write-Host "Created pool id=$poolId"
+                }
+                # Ensure queue (authorization) in current project
+                $project = $env:SYSTEM_TEAMPROJECT
+                if(-not $project){ throw 'SYSTEM_TEAMPROJECT variable not found' }
+                $queuesUri = "$orgUrl/$([Uri]::EscapeDataString($project))/_apis/distributedtask/queues?api-version=$apiVersion"
+                $queues = Invoke-RestMethod -Method Get -Uri $queuesUri -Headers $headers -ErrorAction Stop
+                if(-not ($queues.value | Where-Object { $_.pool.id -eq $poolId })){
+                  Write-Host "Authorizing pool '$poolName' (id=$poolId) for project '$project' by creating queue"
+                  $qBody = @{ name = $poolName; pool = @{ id = $poolId } } | ConvertTo-Json -Compress
+                  try {
+                    Invoke-RestMethod -Method Post -Uri $queuesUri -Headers ($headers + @{ 'Content-Type'='application/json' }) -Body $qBody -ErrorAction Stop | Out-Null
+                    Write-Host 'Queue created.'
+                  } catch {
+                    if($_.Exception.Response){
+                      $status = $_.Exception.Response.StatusCode.value__
+                      if($status -eq 409){ Write-Warning 'Queue already exists (409 conflict). Proceeding.' }
+                      else { throw }
+                    } else { throw }
+                  }
+                } else { Write-Host "Pool already authorized for project '$project'." }
+          - task: DownloadSecureFile@1
+            name: DownloadKubeconfig
+            displayName: Download AKS kubeconfig (secure file)
+            inputs:
+              secureFile: AKS_my-workload-cluster-dev-014-kubeconfig_file
+          - task: PowerShell@2
+            name: DownloadKubectl
+            displayName: Download kubectl and set KUBECONFIG
+            inputs:
+              targetType: inline
+              pwsh: true
+              script: |                
+                Set-StrictMode -Version Latest
+                $ErrorActionPreference = 'Stop'
+                # Path to the secure file downloaded by the DownloadSecureFile task
+                $secureKubeConfig = '$(DownloadKubeconfig.secureFilePath)'
+                if(-not $secureKubeConfig){ throw 'DownloadSecureFile did not produce a path. Ensure the task name is DownloadKubeconfig.' }
+                $kubeconfigPath = Join-Path $env:AGENT_TEMPDIRECTORY 'kubeconfig'
+                Copy-Item -Path $secureKubeConfig -Destination $kubeconfigPath -Force
+                Write-Host "Copied kubeconfig to $kubeconfigPath"
+                # Expose KUBECONFIG to subsequent tasks in this job
+                Write-Host "##vso[task.setvariable variable=KUBECONFIG]$kubeconfigPath"
+
+                # Ensure kubectl is available; if missing, download the appropriate binary
+                $kubectlCmd = Get-Command kubectl -ErrorAction SilentlyContinue
+                if(-not $kubectlCmd){
+                  Write-Host 'kubectl not found on PATH; downloading...'
+                  if($IsWindows){
+                    $url = 'https://dl.k8s.io/release/v1.29.4/bin/windows/amd64/kubectl.exe'
+                    $kubectlPath = Join-Path $env:AGENT_TEMPDIRECTORY 'kubectl.exe'
+                    Invoke-WebRequest -Uri $url -OutFile $kubectlPath -UseBasicParsing
+                  } else {
+                    $url = 'https://dl.k8s.io/release/v1.29.4/bin/linux/amd64/kubectl'
+                    $kubectlPath = Join-Path $env:AGENT_TEMPDIRECTORY 'kubectl'
+                    Invoke-WebRequest -Uri $url -OutFile $kubectlPath
+                    chmod +x $kubectlPath
+                  }
+                  Write-Host "##vso[task.prependpath]$($env:AGENT_TEMPDIRECTORY)"
+                  Write-Host "Downloaded kubectl to $kubectlPath and prepended AGENT_TEMPDIRECTORY to PATH"
+                } else {
+                  Write-Host "kubectl found at $($kubectlCmd.Path)"
+                }
+          - task: PowerShell@2
+            displayName: Verify Windows node taints and manifest tolerations
+            env:
+              KUBECONFIG: $(KUBECONFIG)
+            inputs:
+              targetType: inline
+              pwsh: true
+              script: |
+                Set-StrictMode -Version Latest
+                $ErrorActionPreference = 'Stop'
+                Write-Host 'Checking Windows node taints...'
+                $nodes = kubectl get nodes -l kubernetes.io/os=windows -o json | ConvertFrom-Json
+                if(-not $nodes.items){ throw 'No Windows nodes found in cluster.' }
+                $taints = @()
+                foreach($n in $nodes.items){
+                  if($n.spec.taints){ $taints += $n.spec.taints }
+                }
+                Write-Host "Windows node taints: $($taints | ConvertTo-Json -Compress)"
+                $yamlPath = 'azsh-windows-agent/windows-sh-agent-deployment.yaml'
+                $yaml = Get-Content $yamlPath -Raw
+                # Try parse JSON first (in case manifest is JSON); otherwise fall back to YAML parsing
+                $manifest = $null
+                try{
+                  $manifest = ConvertFrom-Json $yaml -ErrorAction Stop
+                } catch {
+                  $manifest = $null
+                }
+                if(-not $manifest){
+                  # Minimal YAML parser for tolerations blocks. Produces objects with .key and .effect
+                  $lines = $yaml -split "`n"
+                  $tolerations = @()
+                  $startIndex = $null
+                  for($i=0; $i -lt $lines.Count; $i++){
+                    if($lines[$i] -match '^(\s*)tolerations:\s*$'){ $startIndex = $i; $baseIndent = $matches[1].Length; break }
+                  }
+                  if($startIndex -ne $null){
+                    for($j=$startIndex+1; $j -lt $lines.Count; $j++){
+                      $raw = $lines[$j]
+                      if($raw -match '^(\s*)'){ $lead = $matches[1].Length } else { $lead = 0 }
+                      # stop when indentation is less-or-equal to base (we left the tolerations block)
+                      if($lead -le $baseIndent){ break }
+                      $line = $raw.Trim()
+                      if($line -match '^-\s*'){ # new item
+                        $t = [ordered]@{ key = $null; effect = $null; value = $null }
+                        $tolerations += (New-Object PSObject -Property $t)
+                        if($line -match '-\s*key:\s*"?([^"\s]+)"?'){ $tolerations[-1].key = $matches[1] }
+                        continue
+                      }
+                      if($line -match '^key:\s*"?([^"\s]+)"?'){ if($tolerations.Count -gt 0){ $tolerations[-1].key = $matches[1] } ; continue }
+                      if($line -match '^effect:\s*"?([^"\s]+)"?'){ if($tolerations.Count -gt 0){ $tolerations[-1].effect = $matches[1] } ; continue }
+                      if($line -match '^value:\s*"?([^"\s]+)"?'){ if($tolerations.Count -gt 0){ $tolerations[-1].value = $matches[1] } ; continue }
+                    }
+                    if($tolerations.Count -eq 0){ Write-Warning 'No tolerations block found in manifest.' }
+                    else { Write-Host "Manifest tolerations parsed: $($tolerations | ConvertTo-Json -Compress)" }
+                  } else {
+                    Write-Warning 'No tolerations block found in manifest.'
+                  }
+                } else {
+                  $tolerations = $manifest.spec.template.spec.tolerations
+                  Write-Host "Manifest tolerations: $($tolerations | ConvertTo-Json -Compress)"
+                }
+                $missing = @()
+                foreach($t in $taints){
+                  $key = $t.key; $effect = $t.effect
+                  $found = $false
+                  if($tolerations){
+                    foreach($tol in $tolerations){
+                      if($tol.key -eq $key -and ($tol.effect -eq $effect -or -not $tol.effect)){
+                        $found = $true; break
+                      }
+                    }
+                  }
+                  if(-not $found){ $missing += $key }
+                }
+                if($missing.Count -gt 0){
+                  Write-Warning "Manifest missing tolerations for: $($missing -join ', ')"
+                  throw "Deployment manifest missing required tolerations: $($missing -join ', ')"
+                } else {
+                  Write-Host 'All required tolerations present.'
+                }
+          - task: AzureCLI@2
+            name: DeployWindows
+            displayName: Template & Apply Windows Agents (auth via service connection)
+            env:
+              AZDO_PAT: $(AZDO_PAT)
+            inputs:
+              azureSubscription: $(azureSubscription)
+              scriptType: pscore
+              scriptLocation: inlineScript
+              failOnStandardError: true
+              inlineScript: |
+                Set-StrictMode -Version Latest
+                $ErrorActionPreference = 'Stop'
+                Set-Location azsh-windows-agent
+                $windowsVersion = '${{ parameters.windowsVersion }}'
+                # normalize and guard against pipeline templating producing empty or literal tokens
+                if($null -eq $windowsVersion){ $windowsVersion = '' }
+                $windowsVersion = $windowsVersion.Trim()
+                if([string]::IsNullOrWhiteSpace($windowsVersion) -or $windowsVersion -in @('null','<none>')){
+                  Write-Warning "windowsVersion parameter is empty or invalid ('$windowsVersion'); defaulting to '2022'"
+                  $windowsVersion = '2022'
+                }
+                # remove any accidental leading or trailing hyphens/spaces
+                $windowsVersion = $windowsVersion.Trim('- ').Trim()
+                $instance = '${{ parameters.instanceNumber }}'
+                if([string]::IsNullOrWhiteSpace($instance)){ $instance = '003' }
+                $poolName = "KubernetesPoolWindows$instance"
+                $orgUrl = '${{ parameters.azureDevOpsOrgUrl }}'
+                $acrName = '${{ parameters.acrName }}'
+                if ([string]::IsNullOrWhiteSpace($acrName)) { $acrName = 'cragentssgvhe4aipy37o' }
+                $yamlSecretFile = 'windows-sh-agent-secret.yaml'
+                $yamlSecretFileTemplate = 'windows-sh-agent-secret.template.yaml'
+                $yamlDeploymentFile = 'windows-sh-agent-deployment.yaml'
+                $yamlDeploymentFileTemplate = 'windows-sh-agent-deployment.template.yaml'
+                $namespace = "az-devops-windows-$instance"
+                $dockerRegistryServer = ($acrName + ".azurecr.io").TrimEnd('/')
+                $dockerUser = $acrName
+                # Build image name using concatenation to avoid interpolation edge-cases
+                $imageName = $dockerRegistryServer + "/windows-sh-agent-" + $windowsVersion + ":latest"
+                # Basic sanity checks
+                Write-Host "Computed imageName: $imageName (windowsVersion='${windowsVersion}')"
+                # Ensure imageName has registry/repo:tag form
+                if($imageName -notmatch '^[^/:]+\/.+:[^\s:]+$'){
+                  Write-Error "Computed imageName '$imageName' looks invalid; aborting to avoid deploying a broken manifest. Check windowsVersion parameter and ACR name"
+                  exit 1
+                }
+                $template = (Get-Content $yamlSecretFileTemplate -Raw) -replace '__NAMESPACE__', $namespace
+                $patToken = $env:AZDO_PAT
+                if ([string]::IsNullOrWhiteSpace($patToken)) { throw 'PAT token variable not set in pipeline environment' }
+                $patTokenBase64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($patToken))
+                $poolNameBase64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($poolName))
+                $orgUrlBase64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($orgUrl))
+                $template = $template -replace '__PAT_TOKEN__', $patTokenBase64 -replace '__POOL_NAME__', $poolNameBase64 -replace '__AZURE_DEVOPS_URL__', $orgUrlBase64
+                $template = $template -replace 'name:\s+windows-sh-agent-secret', ('name: windows-sh-agent-secret-' + $instance)
+                $template | Set-Content $yamlSecretFile
+                $deploymentContent = (Get-Content $yamlDeploymentFileTemplate -Raw)
+                if($deploymentContent -notmatch '__IMAGE_NAME__'){
+                  Write-Warning 'Deployment template did not contain __IMAGE_NAME__ token; check template file'
+                }
+                $deploymentContent = $deploymentContent -replace '__NAMESPACE__', $namespace -replace '__IMAGE_NAME__', $imageName
+                $deploymentContent = $deploymentContent -replace 'name:\s+windows-sh-agent-deployment', ('name: windows-sh-agent-deployment-' + $instance)
+                # Log the final rendered deployment (safe: references secrets but values are not included)
+                Write-Host 'Rendered windows deployment YAML:'
+                Write-Host '---'
+                Write-Host $deploymentContent
+                Write-Host '---'
+                $deploymentContent | Set-Content $yamlDeploymentFile
+                $dockerPassword = az acr credential show --name $acrName --query 'passwords[0].value' -o tsv
+                if(-not $dockerPassword){ throw 'Failed to retrieve ACR credentials' }
+                $auth = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes(('{0}:{1}' -f $dockerUser,$dockerPassword)))
+                $cfgObj = @{
+                  auths = @{
+                    $dockerRegistryServer = @{
+                      username = $dockerUser
+                      password = $dockerPassword
+                      auth     = $auth
+                    }
+                  }
+                }
+                $cfg = ($cfgObj | ConvertTo-Json -Depth 4 -Compress)
+                $cfgB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($cfg))
+                @(
+                  'apiVersion: v1'
+                  'kind: Namespace'
+                  'metadata:'
+                  "  name: $namespace"
+                ) | Set-Content namespace-windows.yaml -Encoding utf8
+                @(
+                  'apiVersion: v1'
+                  'kind: Secret'
+                  'metadata:'
+                  '  name: regsecret'
+                  "  namespace: $namespace"
+                  'type: kubernetes.io/dockerconfigjson'
+                  'data:'
+                  "  .dockerconfigjson: $cfgB64"
+                ) | Set-Content windows-regsecret.yaml -Encoding utf8
+          - task: KubernetesManifest@1
+            displayName: Apply Windows namespace
+            inputs:
+              action: deploy
+              kubernetesServiceConnection: AKS_my-workload-cluster-dev-014-kubeconfig
+              manifests: |
+                azsh-windows-agent/namespace-windows.yaml
+          - task: KubernetesManifest@1
+            displayName: Apply Windows regsecret
+            inputs:
+              action: deploy
+              kubernetesServiceConnection: AKS_my-workload-cluster-dev-014-kubeconfig
+              namespace: az-devops-windows-${{ parameters.instanceNumber }}
+              manifests: |
+                azsh-windows-agent/windows-regsecret.yaml
+          - task: KubernetesManifest@1
+            displayName: Apply Windows agent secret & deployment
+            inputs:
+              action: deploy
+              kubernetesServiceConnection: AKS_my-workload-cluster-dev-014-kubeconfig
+              namespace: az-devops-windows-${{ parameters.instanceNumber }}
+              manifests: |
+                azsh-windows-agent/windows-sh-agent-secret.yaml
+                azsh-windows-agent/windows-sh-agent-deployment.yaml
+          - task: PowerShell@2
+            name: ExportWindowsResult
+            displayName: Export Windows job result
+            inputs:
+              targetType: inline
+              pwsh: true
+              script: |
+                Write-Host "Windows job status: $env:AGENT_JOBSTATUS"
+                Write-Host "##vso[task.setvariable variable=JOB_RESULT;isOutput=true]$env:AGENT_JOBSTATUS"
+
+      - job: Summary
+        dependsOn:
+          - LinuxAgents
+          - WindowsAgents
+        condition: succeededOrFailed()
+        pool:
+          vmImage: ubuntu-latest
+        steps:
+          - task: PowerShell@2
+            displayName: Generate config artifact (for validation pipeline)
+            inputs:
+              targetType: inline
+              pwsh: true
+              script: |
+                Set-StrictMode -Version Latest
+                $config = [ordered]@{
+                  instanceNumber    = '${{ parameters.instanceNumber }}'
+                  deployLinux       = $${{ parameters.deployLinux }}
+                  deployWindows     = $${{ parameters.deployWindows }}
+                  azureDevOpsOrgUrl = '${{ parameters.azureDevOpsOrgUrl }}'
+                  windowsVersion    = '${{ parameters.windowsVersion }}'
+                  linuxImageVariant = '${{ parameters.linuxImageVariant }}'
+                } | ConvertTo-Json -Depth 5
+                $path = Join-Path $env:BUILD_ARTIFACTSTAGINGDIRECTORY 'config.json'
+                $config | Out-File $path -Encoding utf8
+                Write-Host "Wrote config to $path"
+          - task: PublishPipelineArtifact@1
+            displayName: Publish agent config artifact
+            inputs:
+              targetPath: "$(Build.ArtifactStagingDirectory)/config.json"
+              artifact: agent-config
+              publishLocation: pipeline
+          - task: PowerShell@2
+            displayName: Compute & attach resource name summary
+            inputs:
+              targetType: inline
+              pwsh: true
+              script: |
+                Set-StrictMode -Version Latest
+                $instance = '${{ parameters.instanceNumber }}'
+                if([string]::IsNullOrWhiteSpace($instance)){ $instance = '003' }
+                $linuxPool        = "KubernetesPoolLinux$instance"
+                $windowsPool      = "KubernetesPoolWindows$instance"
+                $linuxNamespace   = "az-devops-linux-$instance"
+                $windowsNamespace = "az-devops-windows-$instance"
+                $linuxSecret      = "linux-sh-agent-secret-$instance"
+                $linuxDeployment  = "linux-sh-agent-deployment-$instance"
+                $windowsSecret    = "windows-sh-agent-secret-$instance"
+                $windowsDeployment= "windows-sh-agent-deployment-$instance"
+                $linuxResult   = '$[ dependencies.LinuxAgents.result ]'
+                $windowsResult = '$[ dependencies.WindowsAgents.result ]'
+                $lines = @(
+                  '# Self-hosted Agents Deployment Resources',
+                  '',
+                  "**Instance Number:** $instance",
+                  '',
+                  '## Resource Names',
+                  '| Resource Type | Linux | Windows |',
+                  '|---------------|-------|---------|',
+                  "| Namespace | $linuxNamespace | $windowsNamespace |",
+                  "| Pool | $linuxPool | $windowsPool |",
+                  "| Secret | $linuxSecret | $windowsSecret |",
+                  "| Deployment | $linuxDeployment | $windowsDeployment |",
+                  '',
+                  '## Job Results',
+                  "* Linux Job Result: $linuxResult",
+                  "* Windows Job Result: $windowsResult",
+                  '',
+                  '## Notes',
+                  '- Resource names are derived; if a platform was skipped its Kubernetes objects may not exist yet.',
+                  '- Adjust instanceNumber parameter to provision another isolated set.'
+                )
+                $outPath = Join-Path "$env:SYSTEM_DEFAULTWORKINGDIRECTORY" 'resource-summary.md'
+                $lines | Out-File $outPath -Encoding utf8
+                Write-Host "Summary markdown written to $outPath"
+                Write-Host "##vso[task.addattachment type=Distributedtask.Core.Summary;name=Deployment Resources]$outPath"
+                $lines | ForEach-Object { Write-Host $_ }
+          - task: PowerShell@2
+            displayName: Show job results
+            env:
+              LINUX_RESULT: $[ dependencies.LinuxAgents.result ]
+              WINDOWS_RESULT: $[ dependencies.WindowsAgents.result ]
+            inputs:
+              targetType: inline
+              pwsh: true
+              script: |
+                Write-Host "Linux job result: $env:LINUX_RESULT"
+                Write-Host "Windows job result: $env:WINDOWS_RESULT"

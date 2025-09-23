@@ -1,7 +1,14 @@
 steps:
-    - bash: |
-          echo "Hello, Welcome to DevOps ABCs World!"
-          # sleep for 2 minutes
-          echo "Sleeping for 2 minutes..."
-          sleep 120
-      displayName: "Hello World"
+  - bash: |
+      echo "Hello, Welcome to DevOps ABCs World!"
+      # sleep for 2 minutes
+      echo "Sleeping for 2 minutes..."
+      sleep 120
+    displayName: "Hello World"
+  - task: CmdLine@2
+    displayName: test docker
+    inputs:
+      script: |
+        echo Write your commands here
+        echo Hello world
+        docker -v

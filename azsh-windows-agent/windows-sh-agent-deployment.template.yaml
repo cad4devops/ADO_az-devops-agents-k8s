@@ -16,9 +16,13 @@ spec:
         app: azsh-windows-agent
     spec:
       tolerations:
+        # tolerate control-plane taint (some clusters taint control-plane nodes)
+        - key: "node-role.kubernetes.io/control-plane"
+          operator: "Exists"
+          effect: "NoSchedule"
+        # tolerate any sku taint value (Windows nodes may use 'Windows' or 'windows')
         - key: "sku"
-          operator: "Equal"
-          value: "windows"
+          operator: "Exists"
           effect: "NoSchedule"
       nodeSelector:
         kubernetes.io/os: windows
@@ -44,6 +48,13 @@ spec:
           volumeMounts:
             - mountPath: /var/run/docker.sock
               name: docker-volume
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
       imagePullSecrets:
         - name: regsecret
       volumes:

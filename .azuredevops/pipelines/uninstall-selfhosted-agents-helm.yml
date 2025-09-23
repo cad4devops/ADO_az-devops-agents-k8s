@@ -1,0 +1,140 @@
+# Uninstall self-hosted agents (Helm-based)
+# - Helm uninstall agent release
+# - Optionally uninstall KEDA (helm uninstall) and remove KEDA CRDs
+# - Delete linux/windows namespaces
+# - Optionally delete Azure DevOps agent pools
+
+trigger: none
+pr: none
+
+parameters:
+  - name: removeLinux
+    type: boolean
+    default: true
+    displayName: Remove Linux namespace & resources
+  - name: removeWindows
+    type: boolean
+    default: true
+    displayName: Remove Windows namespace & resources
+  - name: deleteAgentPools
+    type: boolean
+    default: true
+    displayName: Delete corresponding Azure DevOps agent pools
+  - name: removeKeda
+    type: boolean
+    default: true
+    displayName: Uninstall KEDA and remove CRDs
+  - name: instanceNumber
+    type: string
+    default: '003'
+    displayName: Instance number suffix (e.g. 003)
+  - name: azureDevOpsOrgUrl
+    type: string
+    default: 'https://dev.azure.com/cad4devops'
+  - name: confirmDeletion
+    type: string
+    default: 'YES'
+    displayName: Type YES to actually perform deletions
+  - name: bootstrapPoolName
+    type: string
+    default: 'KubernetesPoolWindows'
+
+variables:
+  - group: ADO_az-devops-agents-k8s
+
+stages:
+  - stage: UninstallHelm
+    displayName: Uninstall (Helm + namespaces + KEDA cleanup)
+    jobs:
+      - job: Uninstall
+        displayName: Uninstall resources
+        pool:
+          ${{ if ne(parameters.bootstrapPoolName, '') }}:
+            name: ${{ parameters.bootstrapPoolName }}
+          ${{ if eq(parameters.bootstrapPoolName, '') }}:
+            vmImage: ubuntu-latest
+        steps:
+          - checkout: self
+
+          - task: PowerShell@2
+            displayName: Validate confirmation
+            inputs:
+              targetType: inline
+              pwsh: true
+              script: |
+                if('${{ parameters.confirmDeletion }}' -ne 'YES'){
+                  Write-Error "confirmDeletion parameter must be 'YES' to proceed. Current: '${{ parameters.confirmDeletion }}'"
+                } else { Write-Host 'Confirmation OK.' }
+
+          - task: DownloadSecureFile@1
+            name: DownloadKubeconfig
+            displayName: Download AKS kubeconfig (secure file)
+            inputs:
+              secureFile: AKS_my-workload-cluster-dev-014-kubeconfig_file
+
+          - task: PowerShell@2
+            displayName: Prepare kubeconfig & ensure kubectl
+            inputs:
+              targetType: inline
+              pwsh: true
+              script: |
+                Set-StrictMode -Version Latest
+                $ErrorActionPreference = 'Stop'
+                $secureKubeConfig = '$(DownloadKubeconfig.secureFilePath)'
+                if(-not $secureKubeConfig){ throw 'DownloadSecureFile did not produce a path. Ensure the task name is DownloadKubeconfig.' }
+                $kubeconfigPath = Join-Path $env:AGENT_TEMPDIRECTORY 'kubeconfig'
+                Copy-Item -Path $secureKubeConfig -Destination $kubeconfigPath -Force
+                Write-Host "Copied kubeconfig to $kubeconfigPath"
+                Write-Host "##vso[task.setvariable variable=KUBECONFIG]$kubeconfigPath"
+                $kubectlCmd = Get-Command kubectl -ErrorAction SilentlyContinue
+                if(-not $kubectlCmd){
+                  Write-Host 'kubectl not found on PATH; downloading...'
+                  $url = 'https://dl.k8s.io/release/v1.29.4/bin/linux/amd64/kubectl'
+                  $kubectlPath = Join-Path $env:AGENT_TEMPDIRECTORY 'kubectl'
+                  Invoke-WebRequest -Uri $url -OutFile $kubectlPath
+                  chmod +x $kubectlPath
+                  Write-Host "##vso[task.prependpath]$($env:AGENT_TEMPDIRECTORY)"
+                  Write-Host "Downloaded kubectl to $kubectlPath and prepended AGENT_TEMPDIRECTORY to PATH"
+                } else { Write-Host "kubectl found at $($kubectlCmd.Path)" }
+
+          - task: HelmInstaller@1
+            displayName: Install Helm client
+            enabled: false
+            inputs:
+              helmVersionToInstall: 'stable'
+
+          - task: PowerShell@2
+            displayName: Uninstall resources (via repo script)
+            env:
+              KUBECONFIG: $(KUBECONFIG)
+              AZDO_PAT: $(AZDO_PAT)
+            inputs:
+              targetType: inline
+              pwsh: true
+              script: |
+                Set-StrictMode -Version Latest
+                $ErrorActionPreference = 'Stop'
+                $scriptPath = '$(Build.SourcesDirectory)\\.azuredevops\\scripts\\uninstall-selfhosted-agents-helm.ps1'
+                if(-not (Test-Path $scriptPath)){
+                  Write-Error "Uninstall helper script not found at $scriptPath"
+                }
+                # Delegate the full uninstall logic to the repository script so CI matches local behavior
+                pwsh $scriptPath -Kubeconfig "$env:KUBECONFIG" -InstanceNumber '${{ parameters.instanceNumber }}' -AzureDevOpsOrgUrl '${{ parameters.azureDevOpsOrgUrl }}' -AzDevOpsToken $env:AZDO_PAT -RemoveLinux:${{ parameters.removeLinux }} -RemoveWindows:${{ parameters.removeWindows }} -RemoveKeda:${{ parameters.removeKeda }} -DeleteAgentPools:${{ parameters.deleteAgentPools }} -ConfirmDeletion '${{ parameters.confirmDeletion }}'
+
+      - job: Summary
+        displayName: Uninstall Summary
+        dependsOn: Uninstall
+        condition: always()
+        steps:
+          - task: PowerShell@2
+            displayName: Summarize uninstall
+            inputs:
+              targetType: inline
+              pwsh: true
+              script: |
+                $inst='${{ parameters.instanceNumber }}'
+                $lines = @('# Uninstall Summary','',"Instance: $inst",'','Requested:','- removeLinux: ${{ parameters.removeLinux }}','- removeWindows: ${{ parameters.removeWindows }}','- removeKeda: ${{ parameters.removeKeda }}','- deleteAgentPools: ${{ parameters.deleteAgentPools }}')
+                $path = Join-Path $env:SYSTEM_DEFAULTWORKINGDIRECTORY uninstall-helm-summary.md
+                $lines | Out-File $path -Encoding utf8
+                Write-Host "##vso[task.addattachment type=Distributedtask.Core.Summary;name=Uninstall Summary]$path"
+                $lines | ForEach-Object { Write-Host $_ }

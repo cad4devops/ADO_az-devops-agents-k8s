@@ -1,0 +1,410 @@
+# Deploy self-hosted agents using Helm (ensures KEDA is installed)
+trigger: none
+pr: none
+
+parameters:
+  - name: deployLinux
+    type: boolean
+    default: true
+  - name: deployWindows
+    type: boolean
+    default: true
+  - name: windowsVersion
+    type: string
+    default: '2022'
+  - name: linuxImageVariant
+    type: string
+    default: 'docker'
+  - name: acrName
+    type: string
+    default: 'cragentssgvhe4aipy37o'
+  - name: azureDevOpsOrgUrl
+    type: string
+    default: 'https://dev.azure.com/cad4devops'
+  - name: instanceNumber
+    type: string
+    default: '003'
+  - name: bootstrapPoolName
+    type: string
+    default: 'KubernetesPoolWindows'
+
+variables:
+  - group: ADO_az-devops-agents-k8s
+  - name: azureSubscription
+    value: ADO_SvcConnRgScopedProd
+
+stages:
+  - stage: DeployHelm
+    displayName: Deploy via Helm (install KEDA)
+    jobs:
+      - job: HelmDeploy
+        displayName: Deploy agents Helm chart
+        pool:
+          ${{ if ne(parameters.bootstrapPoolName, '') }}:
+            name: ${{ parameters.bootstrapPoolName }}
+          ${{ if eq(parameters.bootstrapPoolName, '') }}:
+            vmImage: ubuntu-latest
+        steps:
+          - checkout: self
+
+          - task: DownloadSecureFile@1
+            name: DownloadKubeconfig
+            displayName: Download AKS kubeconfig (secure file)
+            inputs:
+              secureFile: AKS_my-workload-cluster-dev-014-kubeconfig_file
+
+          - task: HelmInstaller@1
+            enabled: false
+            displayName: Install Helm client
+            inputs:
+              helmVersionToInstall: 'latest' # will install 4 alpha!!
+
+          - task: PowerShell@2
+            displayName: Prepare kubeconfig & ensure kubectl in PATH
+            inputs:
+              targetType: inline
+              pwsh: true
+              script: |
+                Set-StrictMode -Version Latest
+                $ErrorActionPreference = 'Stop'
+                $secureKubeConfig = '$(DownloadKubeconfig.secureFilePath)'
+                if(-not $secureKubeConfig){ throw 'DownloadSecureFile did not produce a path. Ensure the task name is DownloadKubeconfig.' }
+                $kubeconfigPath = Join-Path $env:AGENT_TEMPDIRECTORY 'kubeconfig'
+                Copy-Item -Path $secureKubeConfig -Destination $kubeconfigPath -Force
+                Write-Host "Copied kubeconfig to $kubeconfigPath"
+                Write-Host "##vso[task.setvariable variable=KUBECONFIG]$kubeconfigPath"
+                $kubectlCmd = Get-Command kubectl -ErrorAction SilentlyContinue
+                if(-not $kubectlCmd){
+                  Write-Host 'kubectl not found on PATH; downloading...'
+                  $url = 'https://dl.k8s.io/release/v1.29.4/bin/linux/amd64/kubectl'
+                  $kubectlPath = Join-Path $env:AGENT_TEMPDIRECTORY 'kubectl'
+                  Invoke-WebRequest -Uri $url -OutFile $kubectlPath
+                  chmod +x $kubectlPath
+                  Write-Host "##vso[task.prependpath]$($env:AGENT_TEMPDIRECTORY)"
+                  Write-Host "Downloaded kubectl to $kubectlPath and prepended AGENT_TEMPDIRECTORY to PATH"
+                } else { Write-Host "kubectl found at $($kubectlCmd.Path)" }
+
+          # Azure CLI ACR fetch moved earlier to run before generating helm values
+
+          # Ensure Azure DevOps agent pools exist via repo script
+          # ...existing code...
+          - task: PowerShell@2
+            displayName: Ensure Azure DevOps agent pools exist (via repo script)
+            env:
+              AZDO_PAT: $(AZDO_PAT)
+            inputs:
+              targetType: inline
+              pwsh: true
+              script: |
+                # Delegate pool creation to the repo script so behavior matches local runs
+                Set-StrictMode -Version Latest
+                $ErrorActionPreference = 'Stop'
+                # Ensure $AzDevOpsUrl exists (script references it and StrictMode is enabled in this wrapper)
+                $AzDevOpsUrl = '${{ parameters.azureDevOpsOrgUrl }}'
+                $scriptPath = '$(Build.SourcesDirectory)\\.azuredevops\\scripts\\deploy-selfhosted-agents-helm.ps1'
+                if(-not (Test-Path $scriptPath)){ Write-Warning "Deploy helper script not found at $scriptPath; skipping pool ensure" ; exit 0 }
+                # Call script in a mode that only ensures pools and writes values (WriteValuesOnly)
+                # Use splatting to avoid embedding template directives inside a string
+                # Pipeline parameter values expand to literal text (e.g. True/False). Convert to PowerShell booleans safely.
+                $deployLinuxParamRaw = '${{ parameters.deployLinux }}'
+                $deployWindowsParamRaw = '${{ parameters.deployWindows }}'
+                $deployLinuxParam = $false
+                $deployWindowsParam = $false
+                if($deployLinuxParamRaw -match '^[Tt]rue$|^1$'){ $deployLinuxParam = $true }
+                if($deployWindowsParamRaw -match '^[Tt]rue$|^1$'){ $deployWindowsParam = $true }
+                $psParams = @{
+                  WriteValuesOnly = $true
+                  InstanceNumber = '${{ parameters.instanceNumber }}'
+                  AzureDevOpsOrgUrl = '${{ parameters.azureDevOpsOrgUrl }}'
+                  AzDevOpsToken = $env:AZDO_PAT
+                }
+                if($deployLinuxParam){ $psParams['DeployLinux'] = $true }
+                if($deployWindowsParam){ $psParams['DeployWindows'] = $true }
+                & "$scriptPath" @psParams
+
+          - task: PowerShell@2
+            displayName: 'Diagnostic: show generated helm values and ACR creds presence'
+            inputs:
+              targetType: inline
+              pwsh: true
+              script: |
+                Set-StrictMode -Version Latest
+                $ErrorActionPreference = 'Continue'
+                $artifactPath = '$(Build.ArtifactStagingDirectory)\helm-values-override.yaml'
+                Write-Host "Checking for generated values file: $artifactPath"
+                if(Test-Path $artifactPath){
+                  Write-Host '--- Begin helm-values-override.yaml ---'
+                  Get-Content $artifactPath | ForEach-Object { Write-Host $_ }
+                  Write-Host '--- End helm-values-override.yaml ---'
+                } else { Write-Host 'Values file not found in artifact staging directory.' }
+                # Show whether ACR credential variables are present (do not print secrets)
+                Write-Host "ACR_USERNAME defined: $([bool]('$(ACR_USERNAME)'))"
+                Write-Host "ACR_PASSWORD defined: $([bool]('$(ACR_PASSWORD)'))"
+
+          - task: AzureCLI@2
+            displayName: 'Try fetch ACR credentials via Azure CLI (if admin enabled)'
+            inputs:
+              azureSubscription: '$(azureSubscription)'
+              scriptType: ps
+              scriptLocation: inlineScript
+              inlineScript: |
+                $ErrorActionPreference = 'Stop'
+                # Prefer pipeline-provided ACR name, fall back to template parameter
+                $acrName = $env:ACR_NAME
+                if ([string]::IsNullOrWhiteSpace($acrName)) { $acrName = '${{ parameters.acrName }}' }
+                Write-Host "Attempting to fetch ACR credentials for $acrName..."
+                # If pipeline variables already set, skip fetch
+                if (-not [string]::IsNullOrWhiteSpace($env:ACR_USERNAME) -and -not [string]::IsNullOrWhiteSpace($env:ACR_PASSWORD)) {
+                  Write-Host 'ACR_USERNAME/ACR_PASSWORD already set in pipeline; skipping fetch.'
+                  exit 0
+                }
+                # Try to fetch username and first password (requires admin enabled on ACR)
+                try {
+                  $creds = & az acr credential show -n $acrName --query "[username,passwords[0].value]" -o tsv 2>$null
+                } catch {
+                  $creds = $null
+                }
+                if (-not [string]::IsNullOrWhiteSpace($creds)) {
+                  # creds is tab-separated: username \t password
+                  $parts = $creds -split "\t"
+                  $user = $parts[0]
+                  $pass = $parts[1]
+                  Write-Host "##vso[task.setvariable variable=ACR_USERNAME;issecret=true]$user"
+                  Write-Host "##vso[task.setvariable variable=ACR_PASSWORD;issecret=true]$pass"
+                  Write-Host 'ACR credentials fetched and stored as pipeline variables.'
+                } else {
+                  Write-Host 'Could not fetch ACR credentials (admin disabled or insufficient permissions). Continuing without setting ACR variables.'
+                }
+
+          - task: PowerShell@2
+            displayName: Install/Ensure KEDA and deploy Helm chart (via repo script)
+            env:
+              KUBECONFIG: $(KUBECONFIG)
+              ACR_NAME: ${{ parameters.acrName }}
+              AZDO_PAT: $(AZDO_PAT)
+            inputs:
+              targetType: inline
+              pwsh: true
+              script: |
+                Set-StrictMode -Version Latest
+                $ErrorActionPreference = 'Stop'
+                # Ensure $AzDevOpsUrl exists (script references it and StrictMode is enabled in this wrapper)
+                $AzDevOpsUrl = '${{ parameters.azureDevOpsOrgUrl }}'
+                $scriptPath = '$(Build.SourcesDirectory)\\.azuredevops\\scripts\\deploy-selfhosted-agents-helm.ps1'
+                if(-not (Test-Path $scriptPath)){
+                  Write-Error "Deploy helper script not found at $scriptPath"
+                }
+                # Call the repo script to perform the KEDA install and Helm deploy
+                # Use splatting to avoid embedding template directives inside a string
+                # Pipeline parameter values expand to literal text (e.g. True/False). Convert to PowerShell booleans safely.
+                $deployLinuxParamRaw = '${{ parameters.deployLinux }}'
+                $deployWindowsParamRaw = '${{ parameters.deployWindows }}'
+                $deployLinuxParam = $false
+                $deployWindowsParam = $false
+                if($deployLinuxParamRaw -match '^[Tt]rue$|^1$'){ $deployLinuxParam = $true }
+                if($deployWindowsParamRaw -match '^[Tt]rue$|^1$'){ $deployWindowsParam = $true }
+                $psParams = @{
+                  Kubeconfig = "$env:KUBECONFIG"
+                  InstanceNumber = '${{ parameters.instanceNumber }}'
+                  AcrName = '${{ parameters.acrName }}'
+                  AcrUsername = '$(ACR_USERNAME)'
+                  AcrPassword = '$(ACR_PASSWORD)'
+                  AzureDevOpsOrgUrl = '${{ parameters.azureDevOpsOrgUrl }}'
+                  AzDevOpsToken = $env:AZDO_PAT
+                  EnsureAzDoPools = $true
+                }
+                if($deployLinuxParam){ $psParams['DeployLinux'] = $true }
+                if($deployWindowsParam){ $psParams['DeployWindows'] = $true }
+                & "$scriptPath" @psParams
+
+          - task: PowerShell@2
+            name: SetHelmOutputs
+            displayName: Set Helm release outputs (for Summary job)
+            inputs:
+              targetType: inline
+              pwsh: true
+              script: |
+                Set-StrictMode -Version Latest
+                $ErrorActionPreference = 'Stop'
+                $instance = '${{ parameters.instanceNumber }}'
+                if([string]::IsNullOrWhiteSpace($instance)){ $instance = '003' }
+                $releaseName = "az-selfhosted-agents-$instance"
+                # determine namespace selection same as the repo script
+                $deployLinuxRaw = '${{ parameters.deployLinux }}'
+                $deployWindowsRaw = '${{ parameters.deployWindows }}'
+                $deployLinux = $false; if($deployLinuxRaw -match '^[Tt]rue$|^1$'){ $deployLinux = $true }
+                $deployWindows = $false; if($deployWindowsRaw -match '^[Tt]rue$|^1$'){ $deployWindows = $true }
+                $releaseNamespace = if($deployLinux){ "az-devops-linux-$instance" } elseif($deployWindows){ "az-devops-windows-$instance" } else { "az-devops-linux-$instance" }
+                Write-Host "##vso[task.setvariable variable=HELM_RELEASE_NAME;isOutput=true]$releaseName"
+                Write-Host "##vso[task.setvariable variable=HELM_RELEASE_NAMESPACE;isOutput=true]$releaseNamespace"
+
+          - task: PublishPipelineArtifact@1
+            displayName: Publish helm values override
+            inputs:
+              targetPath: '$(Build.ArtifactStagingDirectory)/helm-values-override.yaml'
+              artifact: helm-values
+
+          - task: PowerShell@2
+            displayName: Post-deploy verification
+            env:
+              KUBECONFIG: $(KUBECONFIG)
+            inputs:
+              targetType: inline
+              pwsh: true
+              script: |
+                Set-StrictMode -Version Latest
+                $ErrorActionPreference = 'Stop'
+                Write-Host 'KEDA pods:'
+                kubectl get pods -n keda -o wide || true
+                $inst = '${{ parameters.instanceNumber }}'; if([string]::IsNullOrWhiteSpace($inst)){ $inst='003' }
+                $linuxNs = "az-devops-linux-$inst"
+                $winNs = "az-devops-windows-$inst"
+                Write-Host "Note: az-devops-$inst is deprecated; showing per-OS namespaces instead."
+                Write-Host "Deployments in ${linuxNs} (if present):"
+                kubectl get deployment -n ${linuxNs} -o wide || Write-Host "No resources found in ${linuxNs} or namespace missing."
+                Write-Host "Deployments in ${winNs} (if present):"
+                kubectl get deployment -n ${winNs} -o wide || Write-Host "No resources found in ${winNs} or namespace missing."
+
+      - job: Summary
+        displayName: Summary
+        dependsOn: HelmDeploy
+        condition: succeededOrFailed()
+        pool:
+          vmImage: ubuntu-latest
+        steps:
+          - task: PowerShell@2
+            displayName: Generate config artifact (for validation pipeline)
+            inputs:
+              targetType: inline
+              pwsh: true
+              script: |
+                Set-StrictMode -Version Latest
+                $config = [ordered]@{
+                  instanceNumber    = '${{ parameters.instanceNumber }}'
+                  deployLinux       = $${{ parameters.deployLinux }}
+                  deployWindows     = $${{ parameters.deployWindows }}
+                  azureDevOpsOrgUrl = '${{ parameters.azureDevOpsOrgUrl }}'
+                  windowsVersion    = '${{ parameters.windowsVersion }}'
+                  linuxImageVariant = '${{ parameters.linuxImageVariant }}'
+                } | ConvertTo-Json -Depth 5
+                $path = Join-Path $env:BUILD_ARTIFACTSTAGINGDIRECTORY 'config.json'
+                $config | Out-File $path -Encoding utf8
+                Write-Host "Wrote config to $path"
+          - task: PublishPipelineArtifact@1
+            displayName: Publish agent config artifact
+            inputs:
+              targetPath: "$(Build.ArtifactStagingDirectory)/config.json"
+              artifact: agent-config
+              publishLocation: pipeline
+          - task: PowerShell@2
+            displayName: Compute & attach resource name summary
+            env:
+              # runtime expression: inject the HelmDeploy job result into the task environment
+              HELM_DEPLOY_RESULT: $[ dependencies.HelmDeploy.result ]
+              # Read outputs from the HelmDeploy.SetHelmOutputs task (job-scoped output variables)
+              HELM_RELEASE_NAME: $[ dependencies.HelmDeploy.outputs['SetHelmOutputs.HELM_RELEASE_NAME'] ]
+              HELM_RELEASE_NAMESPACE: $[ dependencies.HelmDeploy.outputs['SetHelmOutputs.HELM_RELEASE_NAMESPACE'] ]
+            inputs:
+              targetType: inline
+              pwsh: true
+              script: |
+                # Defensive summary: don't let unexpanded runtime tokens or missing helm/commands fail the task
+                Set-StrictMode -Version Latest
+                $ErrorActionPreference = 'Continue'
+                try {
+                  $instance = '${{ parameters.instanceNumber }}'
+                  if([string]::IsNullOrWhiteSpace($instance)){ $instance = '003' }
+                  $linuxPool        = "KubernetesPoolLinux$instance"
+                  $windowsPool      = "KubernetesPoolWindows$instance"
+                  $linuxNamespace   = "az-devops-linux-$instance"
+                  $windowsNamespace = "az-devops-windows-$instance"
+                  $linuxSecret      = "linux-sh-agent-secret-$instance"
+                  $linuxDeployment  = "linux-sh-agent-deployment-$instance"
+                  $windowsSecret    = "windows-sh-agent-secret-$instance"
+                  $windowsDeployment= "windows-sh-agent-deployment-$instance"
+
+                  # Read the injected helm deploy result from the environment (may be an unexpanded runtime token)
+                  $linuxResult = $env:HELM_DEPLOY_RESULT
+                  if([string]::IsNullOrWhiteSpace($linuxResult)){
+                    $linuxResult = 'Unknown'
+                  }
+                  # If runtime-expression tokens were passed verbatim (e.g. $[ dependencies... ]) replace with Unknown
+                  if($linuxResult.Trim().StartsWith('$[')){
+                    $linuxResult = 'Unknown'
+                  }
+
+                  $releaseName = $env:HELM_RELEASE_NAME
+                  $releaseNamespace = $env:HELM_RELEASE_NAMESPACE
+                  if([string]::IsNullOrWhiteSpace($releaseName) -or $releaseName.Trim().StartsWith('$[')){ $releaseName = 'az-selfhosted-agents' }
+                  if([string]::IsNullOrWhiteSpace($releaseNamespace) -or $releaseNamespace.Trim().StartsWith('$[')){ $releaseNamespace = "az-devops-linux-$instance" }
+
+                  $lines = @(
+                    '# Self-hosted Agents Deployment Resources',
+                    '',
+                    "**Instance Number:** $instance",
+                    '',
+                    '## Resource Names',
+                    '| Resource Type | Linux | Windows |',
+                    '|---------------|-------|---------|',
+                    "| Namespace | $linuxNamespace | $windowsNamespace |",
+                    "| Pool | $linuxPool | $windowsPool |",
+                    "| Secret | $linuxSecret | $windowsSecret |",
+                    "| Deployment | $linuxDeployment | $windowsDeployment |",
+                    '',
+                    '## Job Results',
+                    "* Linux Job Result: $linuxResult",
+                    '',
+                    '## Notes',
+                    '- Resource names are derived; if a platform was skipped its Kubernetes objects may not exist yet.',
+                    "- Adjust instanceNumber parameter to provision another isolated set."
+                  )
+
+                  $outPath = Join-Path "$env:SYSTEM_DEFAULTWORKINGDIRECTORY" 'resource-summary.md'
+                  $lines | Out-File $outPath -Encoding utf8
+                  Write-Host "Summary markdown written to $outPath"
+                  Write-Host "##vso[task.addattachment type=Distributedtask.Core.Summary;name=Deployment Resources]$outPath"
+                  $lines | ForEach-Object { Write-Host $_ }
+
+                  # If helm is available try to fetch the applied values for the release and attach them as an extra artifact
+                  $helm = Get-Command helm -ErrorAction SilentlyContinue
+                  if($helm){
+                    try{
+                      $values = & helm get values $releaseName -n $releaseNamespace -o yaml 2>$null
+                      if(-not [string]::IsNullOrWhiteSpace($values)){
+                        $valsPath = Join-Path "$env:SYSTEM_DEFAULTWORKINGDIRECTORY" 'helm-applied-values.yaml'
+                        $values | Out-File $valsPath -Encoding utf8
+                        Write-Host "Wrote helm applied values to $valsPath"
+                        Write-Host "##vso[task.uploadfile]$valsPath"
+                      }
+                    } catch { Write-Host "helm get values failed: $($_.Exception.Message)" }
+                  } else { Write-Host 'helm client not found in PATH; skipping helm get values.' }
+                } catch {
+                  Write-Host "Summary step encountered non-fatal error: $($_.Exception.Message)"
+                } finally {
+                  # Ensure this summary step never fails the pipeline
+                  exit 0
+                }
+
+          - task: PowerShell@2
+            displayName: Check for applied helm values file
+            name: CheckHelmAppliedValues
+            inputs:
+              targetType: inline
+              pwsh: true
+              script: |
+                Set-StrictMode -Version Latest
+                $path = Join-Path "$env:SYSTEM_DEFAULTWORKINGDIRECTORY" 'helm-applied-values.yaml'
+                if(Test-Path $path){
+                  Write-Host "Found applied helm values at $path"
+                  Write-Host "##vso[task.setvariable variable=HelmAppliedValuesExists]true"
+                } else {
+                  Write-Host "Applied helm values not found at $path"
+                  Write-Host "##vso[task.setvariable variable=HelmAppliedValuesExists]false"
+                }
+
+          - task: PublishPipelineArtifact@1
+            displayName: Publish applied helm values (if present)
+            inputs:
+              targetPath: '$(System.DefaultWorkingDirectory)/helm-applied-values.yaml'
+              artifact: helm-applied-values
+            condition: and(succeeded(), eq(variables['HelmAppliedValuesExists'], 'true'))

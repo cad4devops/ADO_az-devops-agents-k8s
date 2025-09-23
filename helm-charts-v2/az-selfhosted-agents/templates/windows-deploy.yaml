@@ -20,10 +20,15 @@ spec:
         {{- include "az-selfhosted-agents.selectorLabels" . | nindent 8 }}
     spec:
       tolerations:
+{{- if .Values.windows.tolerations }}
+{{ toYaml .Values.windows.tolerations | nindent 8 }}
+{{- else }}
         - key: "sku"
           operator: "Equal"
-          value: "windows"
+          # default value matches node taint in this cluster (case-sensitive)
+          value: "Windows"
           effect: "NoSchedule"
+{{- end }}
       nodeSelector:
         kubernetes.io/os: windows
       containers:
