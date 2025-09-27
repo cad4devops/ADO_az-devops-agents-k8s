@@ -19,7 +19,7 @@ parameters:
     default: 180
   - name: useOnPremAgents
     type: boolean
-    default: true # Set to true to use on-premises agents, false to use cloud agents
+    default: false # Set to true to use on-premises agents, false to use cloud agents
 
 resources:
   pipelines:
