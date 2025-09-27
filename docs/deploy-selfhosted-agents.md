@@ -19,22 +19,31 @@ Prerequisites
 - Azure service connection with permissions to interact with the target subscription (if infra steps run in the pipeline).
 - Secrets (AZP_URL, AZP_TOKEN, AZP_POOL) prepared (the pipeline/Helm values should reference secure values or external secret providers).
 
-Inputs / Parameters
+Inputs / Parameters (notable changes)
 
-- Typical parameters: cluster context, namespace, chart values file or overrides, image tag, enable/disable KEDA, pool name(s).
-- The pipeline may accept boolean flags to enable Linux/Windows pools, and image tag inputs.
+- `kubeconfig` (optional): when not supplied the deploy helper will default to `$env:KUBECONFIG` or the standard user kubeconfig at `~/.kube/config`. This makes it easier to run the helper locally without re-specifying the kubeconfig path.
+- `azDoToken` / AZDO_PAT fallback: If the pipeline parameter for an Azure DevOps token is not explicitly provided the helper accepts the environment variable `AZDO_PAT` as a fallback.
+- ACR credentials: the helper accepts `ACR_ADO_USERNAME` and `ACR_ADO_PASSWORD` from the environment. If one is supplied the other is required — the helper will fail fast on partial credential input to avoid ambiguous failures during image push/pull.
 
 Outputs
 
 - Helm release deployed (or Kubernetes resources applied).
-- Optionally creates/update Kubernetes Secrets for agent registration.
+- Optionally creates/updates Kubernetes Secrets for agent registration.
 
 How it works (high level)
 
-1. Validate environment (kubectl / helm availability and credentials).
+1. Validate environment (kubectl / helm availability and credentials). The helper performs early validation of the Azure DevOps organization URL and will attempt to pre-create required agent pools via the REST API (Ensure-Pool) when requested.
 2. Render Helm chart values and inject secrets (or use existing secret store).
 3. Install/upgrade Helm chart `az-selfhosted-agents` with provided values.
 4. Optional steps to create agent pools in Azure DevOps via the REST API if desired.
+
+Wrapper script and execution model
+
+- To avoid PowerShell parser/tokenization fragility when users run complex CLI strings in-process, the repository includes a small wrapper script that spawns a child `pwsh` process and executes the deploy helper there. This reduces accidental token leakage and makes argument parsing consistent across environments. Use the wrapper when running locally (see `azsh-linux-agent/01-build-and-push.ps1` or the top-level helper depending on the scenario).
+
+Helm output capture and masking
+
+- When the helper runs Helm with `--debug` the full output is captured to a temporary debug log. Before any publishing or artifact upload the helper masks/redacts sensitive values such as PAT tokens, `AZP_TOKEN`, docker registry passwords, and common secret key names (for example: `personalAccessToken`, `password`, `pw`, `token`). This masked log may be published to pipelines/artifacts for diagnostics without leaking secrets.
 
 Recommended usage
 

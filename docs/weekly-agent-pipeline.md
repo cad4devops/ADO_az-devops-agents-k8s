@@ -23,6 +23,7 @@ Cron: `0 2 * * 1` (Every Monday at 02:00 UTC) — defined under `schedules:` wit
    - Exposes outputs: `SEMVER_EFFECTIVE`, `SEMVER_MODE` (`GitVersion` or `Fallback`).
 2. Preflight job:
    - Validates ACR existence & push/list permissions using the configured service connection.
+   - Validates ACR existence & push/list permissions using the configured service connection. The preflight fails early if registry credentials are missing or insufficient.
 3. LinuxAgentImage job (conditional):
    - Builds & pushes Linux agent image with the effective tag suffix.
    - Captures image digest for traceability.
@@ -67,6 +68,18 @@ Cron: `0 2 * * 1` (Every Monday at 02:00 UTC) — defined under `schedules:` wit
 - Git tag push uses the system OAuth token (`SYSTEM_ACCESSTOKEN`) injected via ephemeral `git -c http.extraheader` to avoid persisting credentials.
 - ACR access validated before builds (list + login + token retrieval). Prevents wasted compute on permission errors.
 - PAT / secrets for agent runtime are handled separately (not part of this pipeline), typically via Kubernetes secrets / Helm values.
+
+Notes on credential handling & safe-fail behavior
+
+- For any scripts in this repo that accept ACR credentials via environment variables (`ACR_ADO_USERNAME`, `ACR_ADO_PASSWORD`) both values must be supplied. Scripts will fail fast on partial credentials to avoid ambiguous errors later in the flow.
+- The repository helpers prefer explicit parameters where available, but accept environment fallbacks (for example `AZDO_PAT` for Azure DevOps PAT). When destructive actions are requested (e.g., removing pools or registry cleanup) the helper will skip those steps if required credentials are missing to avoid accidental data loss.
+
+- Wrapper & debug output: the repo includes a small wrapper that spawns a child `pwsh` process to run helpers; use it for local runs to avoid parser/tokenization pitfalls. If any helper emits Helm `--debug` logs the helper captures them and masks likely secrets prior to publishing artifacts.
+
+Wrapper & debug output
+
+- The repo includes a small wrapper that spawns a child `pwsh` process to run helpers; use it for local runs to avoid parser/tokenization pitfalls.
+- If any build or deploy helper emits Helm `--debug` logs, the helper captures and masks secrets prior to publishing artifacts.
 
 ## Artifacts Produced
 

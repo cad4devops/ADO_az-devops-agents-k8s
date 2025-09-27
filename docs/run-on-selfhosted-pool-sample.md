@@ -14,7 +14,14 @@ When to run
 What it does
 
 - Queues a short job that runs trivial tasks (echo, tool checks) on the target pool.
-- Optionally reports success/failure back to the calling validation job.
+- Accepts numeric parameters for hello/wait behavior so the calling validate pipeline can tune timeouts per OS.
+- Optionally reports success/failure back to the calling validation job via pipeline outputs.
+
+Parameters and usage
+
+- `helloWaitSeconds` (number): the sample job will wait this many seconds for its hello-world pod/container to become ready. The validate pipeline forwards either `linuxHelloWaitSeconds` or `windowsHelloWaitSeconds` as appropriate.
+
+- The calling validate pipeline forwards the OS-specific numeric wait parameter as a literal numeric value into this template to avoid shell interpolation issues in the task script.
 
 How to adapt
 

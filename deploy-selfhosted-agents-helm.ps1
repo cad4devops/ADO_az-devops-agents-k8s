@@ -374,6 +374,22 @@ function Mask-SensitiveYaml([string]$text) {
 (?mi)("auth"\s*:\s*")([^"]+)(")
 '@
 
+    # Match auth values that may be unquoted (YAML-style) or are long base64-like tokens.
+    # Use a lookahead so we don't require capturing a trailing comma/newline which may be absent
+    $patternAuthNoQuotes = @'
+(?mi)^(\s*auth\s*:\s*)([A-Za-z0-9+/=]{8,})(?=\s*[,\r\n]|$)
+'@
+
+    # Match occurrences where JSON keys/values are escaped in logs (e.g. \"auth\": \"...\")
+    $patternEscapedJsonAuth = @'
+(?mi)\\?"auth\\?"\s*:\s*\\?"([A-Za-z0-9+/=]{8,})\\?"
+'@
+
+    # Match dockerconfigjson when embedded as a base64-ish string in JSON output
+    $patternDockerConfigJsonValue = @'
+(?mi)("dockerconfigjson"\s*:\s*")([A-Za-z0-9+/=]{8,})(")
+'@
+
     $opts = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase -bor [System.Text.RegularExpressions.RegexOptions]::Multiline
     $text = [regex]::Replace($text, $patternToken, '${1}(redacted)', $opts)
     $text = [regex]::Replace($text, $patternDocker, '${1}(redacted)', $opts)
@@ -382,6 +398,9 @@ function Mask-SensitiveYaml([string]$text) {
     $text = [regex]::Replace($text, $patternPersonal, '${1}(redacted)', $opts)
     $text = [regex]::Replace($text, $patternDockerInlinePass, '${1}(redacted)${3}', $opts)
     $text = [regex]::Replace($text, $patternDockerInlineAuth, '${1}(redacted)${3}', $opts)
+    $text = [regex]::Replace($text, $patternAuthNoQuotes, '${1}(redacted)', $opts)
+    $text = [regex]::Replace($text, $patternEscapedJsonAuth, '"auth": "(redacted)"', $opts)
+    $text = [regex]::Replace($text, $patternDockerConfigJsonValue, '${1}(redacted)${3}', $opts)
     return $text
 }
 

@@ -1,70 +1,25 @@
 
+# Install and configure self-hosted agents (Linux)
 
-## Add an agent to agent pool  
-### Step 1 - Create the Agent 
-```mkdir myagent && cd myagent```  
+Use the Helm chart in this repository for most scenarios. The chart supports deploying a fleet of Linux agents, wiring secrets, and optionally enabling KEDA for queue-driven autoscaling.
 
-### Step 2 - Download the agent  
-```wget https://vstsagentpackage.azureedge.net/agent/2.214.1/vsts-agent-linux-x64-2.214.1.tar.gz  ```
+Build image and push
 
-### Step 3 - Configure the Agent   
+```powershell
+cd azsh-linux-agent
+pwsh ./01-build-and-push.ps1 -ImageTag 2025-09-20 -Registry youracr.azurecr.io
+```
 
-```tar zxvf vsts-agent-linux-x64-2.214.1.tar.gz  ```   
+Deploy with Helm
 
-List the files in the directory after extracting.  
-```ls -al```  
+```bash
+helm upgrade --install az-selfhosted-agents ./helm-charts-v2 -n az-devops --create-namespace -f values.secret.yaml
+```
 
-### Step 4:  
-Run the below command:  
-```./config.sh```
+Run validation
 
-### Step 5:  
-Enter server URL >  
-```https://dev.azure.com/yourorganization```  
+After deploy, use the validation pipeline (`.azuredevops/pipelines/validate-selfhosted-agents.yml`) to confirm agents register and accept jobs. The validation pipeline can queue a sample run and waits the configured `linuxHelloWaitSeconds` (default 120) before timing out.
 
-### Step 6:  
-Enter authentication type (press enter for PAT) > PAT  
+- Note: the validation pipeline forwards the numeric `linuxHelloWaitSeconds` parameter as a literal numeric value into the sample pipeline to avoid runtime shell interpolation issues. See `.azuredevops/pipelines/run-on-selfhosted-pool-sample-helm.yaml` for details.
 
-### Step 7:  
-Enter personal access token, generated from this step  
-
-### Step 8:  
-Enter Agent pool  
-Give some name  
-
-### Step 9:  
-Enter Agent name --> myBuildAgent_1  
-
-### Step 10:  
-Enter work folder > enter  
-
-that's it agent is successfully configured.  
-
-## Configure the Agent to run as a Service  
-
-```sudo ./svc.sh install &```  
-
-### Execute now to run as a service  
-```./runsvc.sh &```  
-
-
-## Steps for removing Agent from the agent pool  
-Remove the service first  
-```sudo ./svc.sh uninstall```  
-
-```./config.sh remove```
-
-## To Perform Java related builds on this Agent, make sure you install Java and Maven on this VM.  
-
-Install Java 11  
-```sudo apt-get install default-jdk -y```
-
-## Maven Installation   
-Maven is a popular build tool used for building Java applications. Please click here to learn more about Maven. You can install Maven by executing below command:    
-
-```sudo apt update && sudo apt install maven -y```
-
-Check if Maven got installed  
-
-```mvn --version```
 

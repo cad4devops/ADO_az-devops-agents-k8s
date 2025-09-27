@@ -1,70 +1,58 @@
 
+# Linux self-hosted agents (Kubernetes)
 
-## Add an agent to agent pool  
-### Step 1 - Create the Agent 
-```mkdir myagent && cd myagent```  
+This document explains the recommended way to run Azure DevOps self‑hosted agents on Kubernetes using the Helm charts in this repository. If you want to manually install a single agent on a VM, the old manual steps are included in the appendix.
 
-### Step 2 - Download the agent  
-```wget https://vstsagentpackage.azureedge.net/agent/2.214.1/vsts-agent-linux-x64-2.214.1.tar.gz  ```
+Recommended: Helm chart (v2)
 
-### Step 3 - Configure the Agent   
+- Chart: `helm-charts-v2/az-selfhosted-agents` (recommended). The v2 chart contains per-OS subcharts and improved values composition.
+- Quick install (example):
 
-```tar zxvf vsts-agent-linux-x64-2.214.1.tar.gz  ```   
+```bash
+helm upgrade --install az-selfhosted-agents ./helm-charts-v2 -n az-devops --create-namespace -f values.secret.yaml
+```
 
-List the files in the directory after extracting.  
-```ls -al```  
+Important values and secrets
 
-### Step 4:  
-Run the below command:  
-```./config.sh```
+- `secret.data.AZP_URL`, `AZP_TOKEN`, `AZP_POOL`: required to register agents. Values are base64-encoded in `values.secret.yaml` by convention.
+- `linux.enabled`: enable/disable the Linux pool.
+- `linux.deploy.replicas`: desired replica count for the Linux agent Deployment.
+- `autoscaling.keda.enabled`: enable KEDA ScaledObject if you want queue-driven scaling.
 
-### Step 5:  
-Enter server URL >  
-```https://dev.azure.com/yourorganization```  
+Local helper and wrapper
 
-### Step 6:  
-Enter authentication type (press enter for PAT) > PAT  
+- The repository includes a PowerShell deploy helper that runs Helm and performs preflight checks. The helper accepts a `-Kubeconfig` parameter but will fall back to `$env:KUBECONFIG` or `~/.kube/config` when not supplied.
+- To avoid PowerShell parser fragility, use the included wrapper script which spawns a child `pwsh` process to run the helper. This is the recommended way to run the helper locally.
 
-### Step 7:  
-Enter personal access token, generated from this step  
+- The helper also accepts Azure DevOps PAT via the `AZDO_PAT` environment variable as a convenience fallback when an explicit parameter is not provided. When supplying container registry credentials via environment variables `ACR_ADO_USERNAME` / `ACR_ADO_PASSWORD`, both must be present or the helper will fail early.
 
-### Step 8:  
-Enter Agent pool  
-Give some name  
+- If Helm `--debug` is used during deploy, the helper captures the debug output to a temporary file and masks common secret keys/values before any artifact publishing so logs can be shared safely.
 
-### Step 9:  
-Enter Agent name --> myBuildAgent_1  
+Registry credentials
 
-### Step 10:  
-Enter work folder > enter  
+- If you provide container registry credentials via `ACR_ADO_USERNAME` / `ACR_ADO_PASSWORD` they must both be supplied. The helper fails fast on partial input to avoid ambiguous failures.
 
-that's it agent is successfully configured.  
+Validation and sample runs
 
-## Configure the Agent to run as a Service  
+- The repository provides a validation pipeline (`.azuredevops/pipelines/validate-selfhosted-agents.yml`) which queues a sample pipeline to exercise the pool. The validation pipeline exposes parameters for `linuxHelloWaitSeconds` (default 120) which control how long the sample waits for the hello pod.
 
-```sudo ./svc.sh install &```  
+Troubleshooting
 
-### Execute now to run as a service  
-```./runsvc.sh &```  
+- Check `kubectl logs <pod>` in the target namespace for registration errors.
+- Verify the secret contains the correct base64-encoded `AZP_TOKEN` and `AZP_URL`.
 
+Appendix: manual agent install (legacy)
 
-## Steps for removing Agent from the agent pool  
-Remove the service first  
-```sudo ./svc.sh uninstall```  
+If you need to register a single Linux VM agent manually, follow the classic steps:
 
-```./config.sh remove```
+```bash
+mkdir myagent && cd myagent
+wget https://vstsagentpackage.azureedge.net/agent/2.214.1/vsts-agent-linux-x64-2.214.1.tar.gz
+tar zxvf vsts-agent-linux-x64-2.214.1.tar.gz
+./config.sh
+# follow prompts: URL, PAT, pool, name
+sudo ./svc.sh install
+sudo ./svc.sh start
+```
 
-## To Perform Java related builds on this Agent, make sure you install Java and Maven on this VM.  
-
-Install Java 11  
-```sudo apt-get install default-jdk -y```
-
-## Maven Installation   
-Maven is a popular build tool used for building Java applications. Please click here to learn more about Maven. You can install Maven by executing below command:    
-
-```sudo apt update && sudo apt install maven -y```
-
-Check if Maven got installed  
-
-```mvn --version```
 
