@@ -18,7 +18,7 @@ parameters:
     type: string
     default: "Deploy in Parallel"
   - name: helloWaitSeconds
-    type: int
+    type: number
     default: 180
 
 stages:
