@@ -5,6 +5,14 @@
 trigger: none
 pr: none
 
+parameters:
+  - name: linuxHelloWaitSeconds
+    type: number
+    default: 120
+  - name: windowsHelloWaitSeconds
+    type: number
+    default: 180
+
 resources:
   pipelines:
     - pipeline: deployAgentsHelm
@@ -101,6 +109,8 @@ stages:
             value: $[ dependencies.LoadConfig.outputs['ParseConfig.instanceNumber'] ]
           - name: azureDevOpsOrgUrl
             value: $[ dependencies.LoadConfig.outputs['ParseConfig.azureDevOpsOrgUrl'] ]
+          - name: linuxHelloWaitSeconds
+            value: ${{ parameters.linuxHelloWaitSeconds }}
         steps:
           - download: deployAgentsHelm
             artifact: agent-config
@@ -170,7 +180,7 @@ stages:
                 & az devops configure --defaults organization=$orgUrl project=$project | Out-Null
 
                 # Queue the pipeline run with parameters (the sample pipeline defines parameters)
-                $runJson = & az pipelines run --name $pipelineName --parameters instanceNumber=$instance os=linux --output json 2>&1
+                $runJson = & az pipelines run --name $pipelineName --parameters instanceNumber=$instance os=linux helloWaitSeconds=$(linuxHelloWaitSeconds) --output json 2>&1
                 if($LASTEXITCODE -ne 0){ Write-Error $runJson; throw 'Failed to queue sample pipeline run via az pipelines run' }
                 $runObj = $runJson | Out-String | ConvertFrom-Json
                 $runId = $runObj.id
@@ -182,24 +192,32 @@ stages:
                 Write-Host "##vso[task.setvariable variable=sampleRunUrl;isOutput=true]$runUrl"
 
                 # Poll run status until finished (robust to different az output shapes)
+                # Add a timeout so this step doesn't wait indefinitely. Defaults to 1800s (30m).
                 $state = $null; $result = $null
+                $maxSeconds = 1800
+                $interval = 5
+                $elapsed = 0
+                Write-Host "Sample run URL: $runUrl"
                 while($true){
-                  Start-Sleep -Seconds 5
+                  Start-Sleep -Seconds $interval
+                  $elapsed += $interval
                   $showRaw = & az pipelines runs show --id $runId --output json 2>&1 | Out-String
                   try{
                     $showObj = $showRaw | ConvertFrom-Json
                   } catch {
                     Write-Warning "Failed to parse az pipelines runs show output: $showRaw"
+                    if($elapsed -ge $maxSeconds){ throw "Timed out waiting for sample pipeline run to produce valid status after $maxSeconds seconds (runId=$runId)" }
                     continue
                   }
-                  if($null -eq $showObj){ Write-Host 'No run information yet'; continue }
+                  if($null -eq $showObj){ Write-Host 'No run information yet'; if($elapsed -ge $maxSeconds){ throw "Timed out waiting for sample pipeline run to start after $maxSeconds seconds (runId=$runId)" }; continue }
                   # az may return an object or an array
                   $info = if($showObj -is [System.Array]){ $showObj[0] } else { $showObj }
                   # prefer 'state', fall back to 'status'
                   if($info.PSObject.Properties.Name -contains 'state'){ $state = $info.state } elseif($info.PSObject.Properties.Name -contains 'status'){ $state = $info.status }
                   if($info.PSObject.Properties.Name -contains 'result'){ $result = $info.result }
-                  Write-Host "Sample run state=$state result=$result"
+                  Write-Host "Sample run state=$state result=$result (elapsed=${elapsed}s)"
                   if($state -in @('completed','canceled','failed')){ break }
+                  if($elapsed -ge $maxSeconds){ throw "Timed out waiting for sample pipeline run to complete after $maxSeconds seconds (runId=$runId). Last known state='$state' result='$result'" }
                 }
                 # Fetch final run info to be sure
                 $finalRaw = & az pipelines runs show --id $runId --output json 2>&1 | Out-String
@@ -209,7 +227,13 @@ stages:
                 $finalResult = $null
                 if($finalInfo -ne $null -and $finalInfo.PSObject.Properties.Name -contains 'result'){ $finalResult = $finalInfo.result }
                 if(-not $finalResult){ $finalResult = $result }
-                if($finalResult -ne 'succeeded'){ throw "Sample pipeline run did not succeed (result=$finalResult)" }
+                if($finalResult -ne 'succeeded'){
+                  Write-Host 'Sample pipeline final run JSON (raw):'
+                  Write-Host $finalRaw
+                  Write-Host 'Sample pipeline final run object:'
+                  if($finalObj){ $finalObj | ConvertTo-Json -Depth 5 | Write-Host } else { Write-Host '<could not parse final JSON>' }
+                  throw "Sample pipeline run did not succeed (result=$finalResult)"
+                }
       - job: WaitWindowsPool
         displayName: Wait for Windows agent online
         dependsOn: LoadConfig
@@ -267,6 +291,8 @@ stages:
             value: $[ dependencies.LoadConfig.outputs['ParseConfig.instanceNumber'] ]
           - name: azureDevOpsOrgUrl
             value: $[ dependencies.LoadConfig.outputs['ParseConfig.azureDevOpsOrgUrl'] ]
+          - name: windowsHelloWaitSeconds
+            value: ${{ parameters.windowsHelloWaitSeconds }}
         steps:
           - download: deployAgentsHelm
             artifact: agent-config
@@ -335,7 +361,7 @@ stages:
                 & az devops configure --defaults organization=$orgUrl project=$project | Out-Null
 
                 # Queue the pipeline run with parameters (the sample pipeline defines parameters)
-                $runJson = & az pipelines run --name $pipelineName --parameters instanceNumber=$instance os=windows --output json 2>&1
+                $runJson = & az pipelines run --name $pipelineName --parameters instanceNumber=$instance os=windows helloWaitSeconds=$(windowsHelloWaitSeconds) --output json 2>&1
                 if($LASTEXITCODE -ne 0){ Write-Error $runJson; throw 'Failed to queue sample pipeline run via az pipelines run' }
                 $runObj = $runJson | Out-String | ConvertFrom-Json
                 $runId = $runObj.id
@@ -347,24 +373,32 @@ stages:
                 Write-Host "##vso[task.setvariable variable=sampleRunUrl;isOutput=true]$runUrl"
 
                 # Poll run status until finished (robust to different az output shapes)
+                # Add a timeout so this step doesn't wait indefinitely. Defaults to 1800s (30m).
                 $state = $null; $result = $null
+                $maxSeconds = 1800
+                $interval = 5
+                $elapsed = 0
+                Write-Host "Sample run URL: $runUrl"
                 while($true){
-                  Start-Sleep -Seconds 5
+                  Start-Sleep -Seconds $interval
+                  $elapsed += $interval
                   $showRaw = & az pipelines runs show --id $runId --output json 2>&1 | Out-String
                   try{
                     $showObj = $showRaw | ConvertFrom-Json
                   } catch {
                     Write-Warning "Failed to parse az pipelines runs show output: $showRaw"
+                    if($elapsed -ge $maxSeconds){ throw "Timed out waiting for sample pipeline run to produce valid status after $maxSeconds seconds (runId=$runId)" }
                     continue
                   }
-                  if($null -eq $showObj){ Write-Host 'No run information yet'; continue }
+                  if($null -eq $showObj){ Write-Host 'No run information yet'; if($elapsed -ge $maxSeconds){ throw "Timed out waiting for sample pipeline run to start after $maxSeconds seconds (runId=$runId)" }; continue }
                   # az may return an object or an array
                   $info = if($showObj -is [System.Array]){ $showObj[0] } else { $showObj }
                   # prefer 'state', fall back to 'status'
                   if($info.PSObject.Properties.Name -contains 'state'){ $state = $info.state } elseif($info.PSObject.Properties.Name -contains 'status'){ $state = $info.status }
                   if($info.PSObject.Properties.Name -contains 'result'){ $result = $info.result }
-                  Write-Host "Sample run state=$state result=$result"
+                  Write-Host "Sample run state=$state result=$result (elapsed=${elapsed}s)"
                   if($state -in @('completed','canceled','failed')){ break }
+                  if($elapsed -ge $maxSeconds){ throw "Timed out waiting for sample pipeline run to complete after $maxSeconds seconds (runId=$runId). Last known state='$state' result='$result'" }
                 }
                 # Fetch final run info to be sure
                 $finalRaw = & az pipelines runs show --id $runId --output json 2>&1 | Out-String
@@ -374,7 +408,13 @@ stages:
                 $finalResult = $null
                 if($finalInfo -ne $null -and $finalInfo.PSObject.Properties.Name -contains 'result'){ $finalResult = $finalInfo.result }
                 if(-not $finalResult){ $finalResult = $result }
-                if($finalResult -ne 'succeeded'){ throw "Sample pipeline run did not succeed (result=$finalResult)" }
+                if($finalResult -ne 'succeeded'){
+                  Write-Host 'Sample pipeline final run JSON (raw):'
+                  Write-Host $finalRaw
+                  Write-Host 'Sample pipeline final run object:'
+                  if($finalObj){ $finalObj | ConvertTo-Json -Depth 5 | Write-Host } else { Write-Host '<could not parse final JSON>' }
+                  throw "Sample pipeline run did not succeed (result=$finalResult)"
+                }
       - job: Summary
         displayName: Validation Summary
         dependsOn:

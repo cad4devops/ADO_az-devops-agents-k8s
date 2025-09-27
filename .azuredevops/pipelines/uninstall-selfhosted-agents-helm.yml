@@ -114,12 +114,38 @@ stages:
               script: |
                 Set-StrictMode -Version Latest
                 $ErrorActionPreference = 'Stop'
-                $scriptPath = '$(Build.SourcesDirectory)\\.azuredevops\\scripts\\uninstall-selfhosted-agents-helm.ps1'
+                $scriptPath = '$(Build.SourcesDirectory)\\uninstall-selfhosted-agents-helm.ps1'
                 if(-not (Test-Path $scriptPath)){
                   Write-Error "Uninstall helper script not found at $scriptPath"
                 }
-                # Delegate the full uninstall logic to the repository script so CI matches local behavior
-                pwsh $scriptPath -Kubeconfig "$env:KUBECONFIG" -InstanceNumber '${{ parameters.instanceNumber }}' -AzureDevOpsOrgUrl '${{ parameters.azureDevOpsOrgUrl }}' -AzDevOpsToken $env:AZDO_PAT -RemoveLinux:${{ parameters.removeLinux }} -RemoveWindows:${{ parameters.removeWindows }} -RemoveKeda:${{ parameters.removeKeda }} -DeleteAgentPools:${{ parameters.deleteAgentPools }} -ConfirmDeletion '${{ parameters.confirmDeletion }}'
+                # Build a parameter hashtable and splat it to preserve types (booleans as $true/$false)
+                $params = @{}
+                $params.Kubeconfig = "$(KUBECONFIG)"
+                $params.InstanceNumber = '${{ parameters.instanceNumber }}'
+                $params.AzureDevOpsOrgUrl = '${{ parameters.azureDevOpsOrgUrl }}'
+                $params.AzDevOpsToken = $env:AZDO_PAT
+                if ('${{ parameters.removeLinux }}' -eq 'True') { $params.RemoveLinux = $true }
+                if ('${{ parameters.removeWindows }}' -eq 'True') { $params.RemoveWindows = $true }
+                if ('${{ parameters.removeKeda }}' -eq 'True') { $params.RemoveKeda = $true }
+                if ('${{ parameters.deleteAgentPools }}' -eq 'True') { $params.DeleteAgentPools = $true }
+                $params.ConfirmDeletion = '${{ parameters.confirmDeletion }}'
+
+                # Mask AZDO token for logging
+                $maskedToken = if ($params.AzDevOpsToken) { '***' } else { '(none)' }
+                $logParts = @(
+                  "-Kubeconfig $($params.Kubeconfig)",
+                  "-InstanceNumber $($params.InstanceNumber)",
+                  "-AzureDevOpsOrgUrl $($params.AzureDevOpsOrgUrl)",
+                  "-AzDevOpsToken $maskedToken"
+                )
+                if ($params.RemoveLinux) { $logParts += '-RemoveLinux' }
+                if ($params.RemoveWindows) { $logParts += '-RemoveWindows' }
+                if ($params.RemoveKeda) { $logParts += '-RemoveKeda' }
+                if ($params.DeleteAgentPools) { $logParts += '-DeleteAgentPools' }
+                $logParts += "-ConfirmDeletion $($params.ConfirmDeletion)"
+
+                Write-Host "Invoking uninstall script: $scriptPath with args: $($logParts -join ' ')"
+                & "$scriptPath" @params
 
       - job: Summary
         displayName: Uninstall Summary

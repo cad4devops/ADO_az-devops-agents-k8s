@@ -1,5 +1,0 @@
-steps:
-    -   bash: |
-            echo "Building Docker image"
-            sudo docker build --tag "az-sh-linux-agent:02062024" --file "$(Build.SourcesDirectory)/dockerfiles/linuxSelfhostedAgent/Dockerfile" .
-        displayName: 'Building Docker Image'

@@ -14,7 +14,7 @@ This repository includes helper PowerShell scripts that encapsulate rendering, K
 
 Example (local):
 ```powershell
-pwsh .\.azuredevops\scripts\deploy-selfhosted-agents-helm.ps1 \
+pwsh .\deploy-selfhosted-agents-helm.ps1 \
     -Kubeconfig C:\path\to\kubeconfig \
     -InstanceNumber 003 \
     -AcrName <your-acr> \
@@ -25,7 +25,7 @@ pwsh .\.azuredevops\scripts\deploy-selfhosted-agents-helm.ps1 \
 
 To uninstall (local):
 ```powershell
-pwsh .\.azuredevops\scripts\uninstall-selfhosted-agents-helm.ps1 -InstanceNumber 003 -Kubeconfig C:\path\to\kubeconfig
+pwsh .\uninstall-selfhosted-agents-helm.ps1 -InstanceNumber 003 -Kubeconfig C:\path\to\kubeconfig
 ```
 
 Pipeline authors

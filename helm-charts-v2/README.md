@@ -117,7 +117,7 @@ helm upgrade --install az-selfhosted-agents ./helm-charts-v2 -n az-devops-linux-
 - You can run the helper script locally (requires PowerShell Core / pwsh) to generate values only:
 
 ```powershell
-pwsh ./.azuredevops/scripts/deploy-selfhosted-agents-helm.ps1 -InstanceNumber 003 -AzureDevOpsOrgUrl 'https://dev.azure.com/yourorg' -AzDevOpsToken '<PAT>' -WriteValuesOnly
+pwsh ./deploy-selfhosted-agents-helm.ps1 -InstanceNumber 003 -AzureDevOpsOrgUrl 'https://dev.azure.com/yourorg' -AzDevOpsToken '<PAT>' -WriteValuesOnly
 ```
 
 - The script will emit `helm-values-override-<instance>.yaml` in the repo and, when run in CI, will copy it to `$(Build.ArtifactStagingDirectory)` for publishing.
