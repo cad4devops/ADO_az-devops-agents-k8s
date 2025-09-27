@@ -84,138 +84,25 @@ stages:
                   Write-Host "Downloaded kubectl to $kubectlPath and prepended AGENT_TEMPDIRECTORY to PATH"
                 } else { Write-Host "kubectl found at $($kubectlCmd.Path)" }
 
-          # Azure CLI ACR fetch moved earlier to run before generating helm values
-
-          # Ensure Azure DevOps agent pools exist via repo script
-          # ...existing code...
+          # Simplified: delegate pool creation, KEDA install, and Helm deployment to the repo script.
+          # We keep kubeconfig preparation above; now invoke the single deploy helper with the
+          # necessary parameters and environment variables.
           - task: PowerShell@2
-            displayName: Ensure Azure DevOps agent pools exist (via repo script)
-            env:
-              AZDO_PAT: $(AZDO_PAT)
-            inputs:
-              targetType: inline
-              pwsh: true
-              script: |
-                # Delegate pool creation to the repo script so behavior matches local runs
-                Set-StrictMode -Version Latest
-                $ErrorActionPreference = 'Stop'
-                # Ensure $AzDevOpsUrl exists (script references it and StrictMode is enabled in this wrapper)
-                $AzDevOpsUrl = '${{ parameters.azureDevOpsOrgUrl }}'
-                $scriptPath = '$(Build.SourcesDirectory)\\.azuredevops\\scripts\\deploy-selfhosted-agents-helm.ps1'
-                if(-not (Test-Path $scriptPath)){ Write-Warning "Deploy helper script not found at $scriptPath; skipping pool ensure" ; exit 0 }
-                # Call script in a mode that only ensures pools and writes values (WriteValuesOnly)
-                # Use splatting to avoid embedding template directives inside a string
-                # Pipeline parameter values expand to literal text (e.g. True/False). Convert to PowerShell booleans safely.
-                $deployLinuxParamRaw = '${{ parameters.deployLinux }}'
-                $deployWindowsParamRaw = '${{ parameters.deployWindows }}'
-                $deployLinuxParam = $false
-                $deployWindowsParam = $false
-                if($deployLinuxParamRaw -match '^[Tt]rue$|^1$'){ $deployLinuxParam = $true }
-                if($deployWindowsParamRaw -match '^[Tt]rue$|^1$'){ $deployWindowsParam = $true }
-                $psParams = @{
-                  WriteValuesOnly = $true
-                  InstanceNumber = '${{ parameters.instanceNumber }}'
-                  AzureDevOpsOrgUrl = '${{ parameters.azureDevOpsOrgUrl }}'
-                  AzDevOpsToken = $env:AZDO_PAT
-                }
-                if($deployLinuxParam){ $psParams['DeployLinux'] = $true }
-                if($deployWindowsParam){ $psParams['DeployWindows'] = $true }
-                & "$scriptPath" @psParams
-
-          - task: PowerShell@2
-            displayName: 'Diagnostic: show generated helm values and ACR creds presence'
-            inputs:
-              targetType: inline
-              pwsh: true
-              script: |
-                Set-StrictMode -Version Latest
-                $ErrorActionPreference = 'Continue'
-                $artifactPath = '$(Build.ArtifactStagingDirectory)\helm-values-override.yaml'
-                Write-Host "Checking for generated values file: $artifactPath"
-                if(Test-Path $artifactPath){
-                  Write-Host '--- Begin helm-values-override.yaml ---'
-                  Get-Content $artifactPath | ForEach-Object { Write-Host $_ }
-                  Write-Host '--- End helm-values-override.yaml ---'
-                } else { Write-Host 'Values file not found in artifact staging directory.' }
-                # Show whether ACR credential variables are present (do not print secrets)
-                Write-Host "ACR_USERNAME defined: $([bool]('$(ACR_USERNAME)'))"
-                Write-Host "ACR_PASSWORD defined: $([bool]('$(ACR_PASSWORD)'))"
-
-          - task: AzureCLI@2
-            displayName: 'Try fetch ACR credentials via Azure CLI (if admin enabled)'
-            inputs:
-              azureSubscription: '$(azureSubscription)'
-              scriptType: ps
-              scriptLocation: inlineScript
-              inlineScript: |
-                $ErrorActionPreference = 'Stop'
-                # Prefer pipeline-provided ACR name, fall back to template parameter
-                $acrName = $env:ACR_NAME
-                if ([string]::IsNullOrWhiteSpace($acrName)) { $acrName = '${{ parameters.acrName }}' }
-                Write-Host "Attempting to fetch ACR credentials for $acrName..."
-                # If pipeline variables already set, skip fetch
-                if (-not [string]::IsNullOrWhiteSpace($env:ACR_USERNAME) -and -not [string]::IsNullOrWhiteSpace($env:ACR_PASSWORD)) {
-                  Write-Host 'ACR_USERNAME/ACR_PASSWORD already set in pipeline; skipping fetch.'
-                  exit 0
-                }
-                # Try to fetch username and first password (requires admin enabled on ACR)
-                try {
-                  $creds = & az acr credential show -n $acrName --query "[username,passwords[0].value]" -o tsv 2>$null
-                } catch {
-                  $creds = $null
-                }
-                if (-not [string]::IsNullOrWhiteSpace($creds)) {
-                  # creds is tab-separated: username \t password
-                  $parts = $creds -split "\t"
-                  $user = $parts[0]
-                  $pass = $parts[1]
-                  Write-Host "##vso[task.setvariable variable=ACR_USERNAME;issecret=true]$user"
-                  Write-Host "##vso[task.setvariable variable=ACR_PASSWORD;issecret=true]$pass"
-                  Write-Host 'ACR credentials fetched and stored as pipeline variables.'
-                } else {
-                  Write-Host 'Could not fetch ACR credentials (admin disabled or insufficient permissions). Continuing without setting ACR variables.'
-                }
-
-          - task: PowerShell@2
-            displayName: Install/Ensure KEDA and deploy Helm chart (via repo script)
+            displayName: Deploy agents (via repo script wrapper)
             env:
               KUBECONFIG: $(KUBECONFIG)
               ACR_NAME: ${{ parameters.acrName }}
               AZDO_PAT: $(AZDO_PAT)
+              ACR_USERNAME: $(ACR_USERNAME)
+              ACR_PASSWORD: $(ACR_PASSWORD)
+              INSTANCE_NUMBER: '${{ parameters.instanceNumber }}'
+              DEPLOY_LINUX: '${{ parameters.deployLinux }}'
+              DEPLOY_WINDOWS: '${{ parameters.deployWindows }}'
+              AZDO_ORG_URL: '${{ parameters.azureDevOpsOrgUrl }}'
             inputs:
-              targetType: inline
+              targetType: filePath
+              filePath: '$(Build.SourcesDirectory)\\.azuredevops\\scripts\\run-deploy-selfhosted-agents-helm.ps1'
               pwsh: true
-              script: |
-                Set-StrictMode -Version Latest
-                $ErrorActionPreference = 'Stop'
-                # Ensure $AzDevOpsUrl exists (script references it and StrictMode is enabled in this wrapper)
-                $AzDevOpsUrl = '${{ parameters.azureDevOpsOrgUrl }}'
-                $scriptPath = '$(Build.SourcesDirectory)\\.azuredevops\\scripts\\deploy-selfhosted-agents-helm.ps1'
-                if(-not (Test-Path $scriptPath)){
-                  Write-Error "Deploy helper script not found at $scriptPath"
-                }
-                # Call the repo script to perform the KEDA install and Helm deploy
-                # Use splatting to avoid embedding template directives inside a string
-                # Pipeline parameter values expand to literal text (e.g. True/False). Convert to PowerShell booleans safely.
-                $deployLinuxParamRaw = '${{ parameters.deployLinux }}'
-                $deployWindowsParamRaw = '${{ parameters.deployWindows }}'
-                $deployLinuxParam = $false
-                $deployWindowsParam = $false
-                if($deployLinuxParamRaw -match '^[Tt]rue$|^1$'){ $deployLinuxParam = $true }
-                if($deployWindowsParamRaw -match '^[Tt]rue$|^1$'){ $deployWindowsParam = $true }
-                $psParams = @{
-                  Kubeconfig = "$env:KUBECONFIG"
-                  InstanceNumber = '${{ parameters.instanceNumber }}'
-                  AcrName = '${{ parameters.acrName }}'
-                  AcrUsername = '$(ACR_USERNAME)'
-                  AcrPassword = '$(ACR_PASSWORD)'
-                  AzureDevOpsOrgUrl = '${{ parameters.azureDevOpsOrgUrl }}'
-                  AzDevOpsToken = $env:AZDO_PAT
-                  EnsureAzDoPools = $true
-                }
-                if($deployLinuxParam){ $psParams['DeployLinux'] = $true }
-                if($deployWindowsParam){ $psParams['DeployWindows'] = $true }
-                & "$scriptPath" @psParams
 
           - task: PowerShell@2
             name: SetHelmOutputs
@@ -255,15 +142,15 @@ stages:
                 Set-StrictMode -Version Latest
                 $ErrorActionPreference = 'Stop'
                 Write-Host 'KEDA pods:'
-                kubectl get pods -n keda -o wide || true
+                try { kubectl get pods -n keda -o wide } catch { Write-Warning "Failed to list KEDA pods: $($_.Exception.Message)" }
                 $inst = '${{ parameters.instanceNumber }}'; if([string]::IsNullOrWhiteSpace($inst)){ $inst='003' }
                 $linuxNs = "az-devops-linux-$inst"
                 $winNs = "az-devops-windows-$inst"
                 Write-Host "Note: az-devops-$inst is deprecated; showing per-OS namespaces instead."
                 Write-Host "Deployments in ${linuxNs} (if present):"
-                kubectl get deployment -n ${linuxNs} -o wide || Write-Host "No resources found in ${linuxNs} or namespace missing."
+                try { kubectl get deployment -n ${linuxNs} -o wide } catch { Write-Host "No resources found in ${linuxNs} or namespace missing." }
                 Write-Host "Deployments in ${winNs} (if present):"
-                kubectl get deployment -n ${winNs} -o wide || Write-Host "No resources found in ${winNs} or namespace missing."
+                try { kubectl get deployment -n ${winNs} -o wide } catch { Write-Host "No resources found in ${winNs} or namespace missing." }
 
       - job: Summary
         displayName: Summary
@@ -371,9 +258,25 @@ stages:
                     try{
                       $values = & helm get values $releaseName -n $releaseNamespace -o yaml 2>$null
                       if(-not [string]::IsNullOrWhiteSpace($values)){
+                        # Local helper to mask obvious secrets before writing to artifacts
+                        function MaskSensitive([string]$text){
+                          if(-not $text){ return $text }
+                          $opts = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase -bor [System.Text.RegularExpressions.RegexOptions]::Multiline
+                          # AZP tokens
+                          $text = [regex]::Replace($text, '(?mi)^(\s*(?:AZP_TOKEN|AZP_TOKEN_VALUE)\s*:\s*)(?:''[^'']*''|"[^"]*"|[^\r\n]+)', '${1}(redacted)', $opts)
+                          # personalAccessToken
+                          $text = [regex]::Replace($text, '(?mi)^(\s*personalAccessToken\s*:\s*)(?:''[^'']*''|"[^"]*"|[^\r\n]+)', '${1}(redacted)', $opts)
+                          # dockerconfigjson inline fields
+                          $text = [regex]::Replace($text, '(?mi)("password"\s*:\s*")([^"]+)(")', '${1}(redacted)${3}', $opts)
+                          $text = [regex]::Replace($text, '(?mi)("auth"\s*:\s*")([^"]+)(")', '${1}(redacted)${3}', $opts)
+                          # generic password keys
+                          $text = [regex]::Replace($text, '(?mi)^(\s*password\s*:\s*)(?:''[^'']*''|"[^"]*"|[^\r\n]+)', '${1}(redacted)', $opts)
+                          return $text
+                        }
                         $valsPath = Join-Path "$env:SYSTEM_DEFAULTWORKINGDIRECTORY" 'helm-applied-values.yaml'
-                        $values | Out-File $valsPath -Encoding utf8
-                        Write-Host "Wrote helm applied values to $valsPath"
+                        $masked = MaskSensitive $values
+                        $masked | Out-File $valsPath -Encoding utf8
+                        Write-Host "Wrote masked helm applied values to $valsPath"
                         Write-Host "##vso[task.uploadfile]$valsPath"
                       }
                     } catch { Write-Host "helm get values failed: $($_.Exception.Message)" }

@@ -17,6 +17,9 @@ parameters:
   - name: stageDisplayName
     type: string
     default: "Deploy in Parallel"
+  - name: helloWaitSeconds
+    type: int
+    default: 180
 
 stages:
   - stage: ${{ parameters.stageName }}
@@ -36,5 +39,9 @@ stages:
             persistCredentials: true
           - ${{ if eq(parameters.os, 'linux') }}:
               - template: ../scripts/kubernetes/linux/hello-world.yaml
+                parameters:
+                  helloWaitSeconds: ${{ parameters.helloWaitSeconds }}
           - ${{ if eq(parameters.os, 'windows') }}:
               - template: ../scripts/kubernetes/windows/hello-world.yaml
+                parameters:
+                  helloWaitSeconds: ${{ parameters.helloWaitSeconds }}

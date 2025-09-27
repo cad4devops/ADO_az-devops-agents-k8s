@@ -1,10 +1,15 @@
+parameters:
+  - name: helloWaitSeconds
+    type: int
+    default: 120
+
 steps:
   - bash: |
       echo "Hello, Welcome to DevOps ABCs World!"
-      # sleep for 2 minutes
-      echo "Sleeping for 2 minutes..."
-      sleep 120
-    displayName: "Hello World"
+      # sleep for a configurable time
+      echo "Sleeping for $(helloWaitSeconds) seconds..."
+      sleep $(helloWaitSeconds)
+    displayName: "Hello World (sleep=$(helloWaitSeconds)s)"
   - task: CmdLine@2
     displayName: test docker
     inputs:

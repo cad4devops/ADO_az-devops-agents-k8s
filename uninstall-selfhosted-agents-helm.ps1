@@ -28,7 +28,7 @@ param(
     ,
     [Parameter(Mandatory=$false)] [string] $AzDevOpsUrl,
     # Backwards-compatible alias used by pipeline templates
-    [Parameter(Mandatory=$false)] [string] $AzureDevOpsOrgUrl,
+    [Parameter(Mandatory=$false)] [string] $AzureDevOpsOrgUrl = "https://dev.azure.com/cad4devops",
     [Parameter(Mandatory=$false)] [string] $AzDevOpsToken,
     [Parameter(Mandatory=$false)] [bool] $RemoveAzDoPools = $true,
     # Pipeline-compatible flags (some pipelines pass these names)
@@ -104,6 +104,25 @@ if($Kubeconfig){
 foreach($tool in @('kubectl','helm')){
     if(-not (Get-Command $tool -ErrorAction SilentlyContinue)){
         Fail "$tool is not installed or not on PATH. Please install it and retry."
+    }
+}
+
+# Determine effective Azure DevOps PAT (prefer parameter, fall back to AZDO_PAT env var)
+$effectiveAzDoToken = $AzDevOpsToken
+if(-not $effectiveAzDoToken -and $env:AZDO_PAT){
+    $effectiveAzDoToken = $env:AZDO_PAT
+    Write-Host "Using Azure DevOps PAT from AZDO_PAT environment variable"
+}
+
+# If the caller requested Azure DevOps pool removal, require both org URL and PAT early and fail fast to avoid partial uninstall.
+if($RemoveAzDoPools){
+    if(-not $AzureDevOpsOrgUrl){
+        Write-Warning "RemoveAzDoPools requested but AzureDevOpsOrgUrl not provided; skipping pool removal. Provide -AzureDevOpsOrgUrl to enable pool removal."
+        $RemoveAzDoPools = $false
+    }
+    if($RemoveAzDoPools -and -not $effectiveAzDoToken){
+        Write-Warning "RemoveAzDoPools requested but no Azure DevOps PAT supplied (AzDevOpsToken param or AZDO_PAT env var); skipping pool removal."
+        $RemoveAzDoPools = $false
     }
 }
 
