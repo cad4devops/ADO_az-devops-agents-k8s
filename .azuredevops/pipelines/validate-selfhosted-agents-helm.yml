@@ -2,6 +2,11 @@
 # This pipeline is triggered by the completion of the deploy-selfhosted-agents pipeline as a pipeline resource.
 # It downloads the 'agent-config' artifact (config.json) and uses its values to know which pools to validate.
 
+# Short description: Validate that deployed self-hosted agent pools (Linux/Windows) come online and
+# trigger a small sample pipeline on each pool to confirm agents can run jobs. Set the
+# `useOnPremAgents` parameter to true to run the validation jobs on an on-prem agent pool
+# named 'UbuntuLatestPoolOnPrem' instead of using the hosted `ubuntu-latest` pool.
+
 trigger: none
 pr: none
 
@@ -12,12 +17,15 @@ parameters:
   - name: windowsHelloWaitSeconds
     type: number
     default: 180
+  - name: useOnPremAgents
+    type: boolean
+    default: true # Set to true to use on-premises agents, false to use cloud agents
 
 resources:
   pipelines:
     - pipeline: deployAgentsHelm
       source: ADO_az-devops-agents-k8s-deploy-self-hosted-agents-helm
-      trigger: true  # automatic trigger on successful run of source pipeline
+      trigger: true # automatic trigger on successful run of source pipeline
 
 variables:
   - group: ADO_az-devops-agents-k8s
@@ -31,7 +39,10 @@ stages:
       - job: LoadConfig
         displayName: Load configuration artifact
         pool:
-          vmImage: ubuntu-latest
+          ${{ if parameters.useOnPremAgents }}:
+            name: UbuntuLatestPoolOnPrem
+          ${{ else }}:
+            vmImage: ubuntu-latest
         steps:
           - download: deployAgentsHelm
             artifact: agent-config
@@ -52,18 +63,25 @@ stages:
                 Write-Host "##vso[task.setvariable variable=deployLinux;isOutput=true]$($cfg.deployLinux)"
                 Write-Host "##vso[task.setvariable variable=deployWindows;isOutput=true]$($cfg.deployWindows)"
                 Write-Host "##vso[task.setvariable variable=azureDevOpsOrgUrl;isOutput=true]$($cfg.azureDevOpsOrgUrl)"
-      - job: WaitLinuxPool
-        displayName: Wait for Linux agent online
+      - job: ValidateLinux
+        displayName: Validate Linux self-hosted pool
         dependsOn: LoadConfig
         condition: eq(dependencies.LoadConfig.outputs['ParseConfig.deployLinux'], 'True')
         pool:
-          vmImage: ubuntu-latest
+          ${{ if parameters.useOnPremAgents }}:
+            name: UbuntuLatestPoolOnPrem
+          ${{ else }}:
+            vmImage: ubuntu-latest
         variables:
           - name: instanceNumber
             value: $[ dependencies.LoadConfig.outputs['ParseConfig.instanceNumber'] ]
           - name: azureDevOpsOrgUrl
             value: $[ dependencies.LoadConfig.outputs['ParseConfig.azureDevOpsOrgUrl'] ]
+          - name: linuxHelloWaitSeconds
+            value: ${{ parameters.linuxHelloWaitSeconds }}
         steps:
+          - download: deployAgentsHelm
+            artifact: agent-config
           - task: PowerShell@2
             displayName: Poll Linux pool
             env:
@@ -76,7 +94,6 @@ stages:
                 $ErrorActionPreference = 'Stop'
                 $pat = $env:AZDO_PAT
                 if(-not $pat){ throw 'AZDO_PAT missing' }
-                # Use pipeline-expanded variables (set as job variables above)
                 $instance = '$(instanceNumber)'
                 $orgUrl = '$(azureDevOpsOrgUrl)'
                 $poolName = "KubernetesPoolLinux$instance"
@@ -98,52 +115,6 @@ stages:
                   if($elapsed -ge $maxSeconds){ throw "Timed out waiting for Linux agent" }
                   Start-Sleep -Seconds $interval; $elapsed += $interval; Write-Host "...still waiting ($elapsed s)";
                 }
-      - job: TestLinuxAgent
-        displayName: Test validation against Linux pool (hosted runner)
-        dependsOn: WaitLinuxPool
-        condition: eq(dependencies.LoadConfig.outputs['ParseConfig.deployLinux'], 'True')
-        pool:
-          vmImage: ubuntu-latest
-        variables:
-          - name: instanceNumber
-            value: $[ dependencies.LoadConfig.outputs['ParseConfig.instanceNumber'] ]
-          - name: azureDevOpsOrgUrl
-            value: $[ dependencies.LoadConfig.outputs['ParseConfig.azureDevOpsOrgUrl'] ]
-          - name: linuxHelloWaitSeconds
-            value: ${{ parameters.linuxHelloWaitSeconds }}
-        steps:
-          - download: deployAgentsHelm
-            artifact: agent-config
-          - task: PowerShell@2
-            displayName: Query Linux pool via REST
-            env:
-              AZDO_PAT: $(AZDO_PAT)
-            inputs:
-              targetType: inline
-              pwsh: true
-              script: |
-                Set-StrictMode -Version Latest
-                $ErrorActionPreference = 'Stop'
-                $pat = $env:AZDO_PAT
-                if(-not $pat){ throw 'AZDO_PAT missing' }
-                  # Read config artifact locally so we don't depend on variable expansion
-                  $cfgPath = Join-Path $env:PIPELINE_WORKSPACE 'deployAgentsHelm/agent-config/config.json'
-                  if(-not (Test-Path $cfgPath)){ throw "Config artifact not found at $cfgPath" }
-                  $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
-                  $instance = $cfg.instanceNumber
-                  $orgUrl = $cfg.azureDevOpsOrgUrl
-                $poolName = "KubernetesPoolLinux$instance"
-                $authHeader = 'Basic ' + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(':' + $pat))
-                $headers = @{ Authorization = $authHeader }
-                $apiVersion = '7.1-preview.1'
-                Write-Host "Verifying pool '$poolName' via REST"
-                $poolResp = Invoke-RestMethod -Method Get -Uri "$orgUrl/_apis/distributedtask/pools?poolName=$([Uri]::EscapeDataString($poolName))&api-version=$apiVersion" -Headers $headers -ErrorAction Stop
-                if($poolResp.count -eq 0){ throw "Pool '$poolName' not found" }
-                $poolId = $poolResp.value[0].id
-                $agents = Invoke-RestMethod -Method Get -Uri "$orgUrl/_apis/distributedtask/pools/$poolId/agents?api-version=$apiVersion" -Headers $headers -ErrorAction Stop
-                $online = @($agents.value | Where-Object { $_.status -eq 'online' })
-                if($online.Count -eq 0){ throw "No online agents found in pool '$poolName'" }
-                Write-Host "Linux agent online: $($online[0].name)"
           - task: PowerShell@2
             name: TriggerSample
             displayName: Trigger sample pipeline on self-hosted Linux pool
@@ -157,7 +128,6 @@ stages:
                 $ErrorActionPreference = 'Stop'
                 $pat = $env:AZDO_PAT
                 if(-not $pat){ throw 'AZDO_PAT missing' }
-                # Read config artifact locally so we don't depend on variable expansion
                 $cfgPath = Join-Path $env:PIPELINE_WORKSPACE 'deployAgentsHelm/agent-config/config.json'
                 if(-not (Test-Path $cfgPath)){ throw "Config artifact not found at $cfgPath" }
                 $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
@@ -168,31 +138,24 @@ stages:
                 $pipelineName = '$(samplePipelineNameHelm)'
                 Write-Host "Triggering sample pipeline '$pipelineName' for instance $instance (os=linux)"
 
-                # Ensure az devops extension is available and configured
                 $null = & az --version 2>$null
                 if($LASTEXITCODE -ne 0){ throw 'Azure CLI (az) not found on PATH; unable to trigger pipeline via az CLI' }
-                # Install azure-devops extension if missing
                 $ext = (& az extension list --query "[?name=='azure-devops']" -o json) | ConvertFrom-Json
                 if(-not $ext){ Write-Host 'Installing azure-devops extension'; az extension add --name azure-devops --yes | Out-Null }
 
-                # Configure defaults and auth
                 $env:AZURE_DEVOPS_EXT_PAT = $pat
                 & az devops configure --defaults organization=$orgUrl project=$project | Out-Null
 
-                # Queue the pipeline run with parameters (the sample pipeline defines parameters)
                 $runJson = & az pipelines run --name $pipelineName --parameters instanceNumber=$instance os=linux helloWaitSeconds=$(linuxHelloWaitSeconds) --output json 2>&1
                 if($LASTEXITCODE -ne 0){ Write-Error $runJson; throw 'Failed to queue sample pipeline run via az pipelines run' }
                 $runObj = $runJson | Out-String | ConvertFrom-Json
                 $runId = $runObj.id
                 if(-not $runId){ throw 'Could not determine run id from az pipelines run output' }
                 Write-Host "Queued pipeline run id: $runId"
-                # Export run id and a best-effort run URL as step outputs so the Summary can reference them
                 Write-Host "##vso[task.setvariable variable=sampleRunId;isOutput=true]$runId"
                 $runUrl = "$orgUrl/$project/_build/results?buildId=$runId&view=results"
                 Write-Host "##vso[task.setvariable variable=sampleRunUrl;isOutput=true]$runUrl"
 
-                # Poll run status until finished (robust to different az output shapes)
-                # Add a timeout so this step doesn't wait indefinitely. Defaults to 1800s (30m).
                 $state = $null; $result = $null
                 $maxSeconds = 1800
                 $interval = 5
@@ -202,24 +165,15 @@ stages:
                   Start-Sleep -Seconds $interval
                   $elapsed += $interval
                   $showRaw = & az pipelines runs show --id $runId --output json 2>&1 | Out-String
-                  try{
-                    $showObj = $showRaw | ConvertFrom-Json
-                  } catch {
-                    Write-Warning "Failed to parse az pipelines runs show output: $showRaw"
-                    if($elapsed -ge $maxSeconds){ throw "Timed out waiting for sample pipeline run to produce valid status after $maxSeconds seconds (runId=$runId)" }
-                    continue
-                  }
+                  try{ $showObj = $showRaw | ConvertFrom-Json } catch { Write-Warning "Failed to parse az pipelines runs show output: $showRaw"; if($elapsed -ge $maxSeconds){ throw "Timed out waiting for sample pipeline run to produce valid status after $maxSeconds seconds (runId=$runId)" }; continue }
                   if($null -eq $showObj){ Write-Host 'No run information yet'; if($elapsed -ge $maxSeconds){ throw "Timed out waiting for sample pipeline run to start after $maxSeconds seconds (runId=$runId)" }; continue }
-                  # az may return an object or an array
                   $info = if($showObj -is [System.Array]){ $showObj[0] } else { $showObj }
-                  # prefer 'state', fall back to 'status'
                   if($info.PSObject.Properties.Name -contains 'state'){ $state = $info.state } elseif($info.PSObject.Properties.Name -contains 'status'){ $state = $info.status }
                   if($info.PSObject.Properties.Name -contains 'result'){ $result = $info.result }
                   Write-Host "Sample run state=$state result=$result (elapsed=${elapsed}s)"
                   if($state -in @('completed','canceled','failed')){ break }
                   if($elapsed -ge $maxSeconds){ throw "Timed out waiting for sample pipeline run to complete after $maxSeconds seconds (runId=$runId). Last known state='$state' result='$result'" }
                 }
-                # Fetch final run info to be sure
                 $finalRaw = & az pipelines runs show --id $runId --output json 2>&1 | Out-String
                 $finalObj = $null
                 try{ $finalObj = $finalRaw | ConvertFrom-Json } catch { Write-Warning "Failed to parse final run show output: $finalRaw" }
@@ -234,18 +188,25 @@ stages:
                   if($finalObj){ $finalObj | ConvertTo-Json -Depth 5 | Write-Host } else { Write-Host '<could not parse final JSON>' }
                   throw "Sample pipeline run did not succeed (result=$finalResult)"
                 }
-      - job: WaitWindowsPool
-        displayName: Wait for Windows agent online
+      - job: ValidateWindows
+        displayName: Validate Windows self-hosted pool
         dependsOn: LoadConfig
         condition: eq(dependencies.LoadConfig.outputs['ParseConfig.deployWindows'], 'True')
         pool:
-          vmImage: ubuntu-latest
+          ${{ if parameters.useOnPremAgents }}:
+            name: UbuntuLatestPoolOnPrem
+          ${{ else }}:
+            vmImage: ubuntu-latest
         variables:
           - name: instanceNumber
             value: $[ dependencies.LoadConfig.outputs['ParseConfig.instanceNumber'] ]
           - name: azureDevOpsOrgUrl
             value: $[ dependencies.LoadConfig.outputs['ParseConfig.azureDevOpsOrgUrl'] ]
+          - name: windowsHelloWaitSeconds
+            value: ${{ parameters.windowsHelloWaitSeconds }}
         steps:
+          - download: deployAgentsHelm
+            artifact: agent-config
           - task: PowerShell@2
             displayName: Poll Windows pool
             env:
@@ -258,7 +219,6 @@ stages:
                 $ErrorActionPreference = 'Stop'
                 $pat = $env:AZDO_PAT
                 if(-not $pat){ throw 'AZDO_PAT missing' }
-                # Use pipeline-expanded variables (set as job variables above)
                 $instance = '$(instanceNumber)'
                 $orgUrl = '$(azureDevOpsOrgUrl)'
                 $poolName = "KubernetesPoolWindows$instance"
@@ -280,51 +240,6 @@ stages:
                   if($elapsed -ge $maxSeconds){ throw "Timed out waiting for Windows agent" }
                   Start-Sleep -Seconds $interval; $elapsed += $interval; Write-Host "...still waiting ($elapsed s)";
                 }
-      - job: TestWindowsAgent
-        displayName: Test validation against Windows pool (hosted runner)
-        dependsOn: WaitWindowsPool
-        condition: eq(dependencies.LoadConfig.outputs['ParseConfig.deployWindows'], 'True')
-        pool:
-          vmImage: ubuntu-latest
-        variables:
-          - name: instanceNumber
-            value: $[ dependencies.LoadConfig.outputs['ParseConfig.instanceNumber'] ]
-          - name: azureDevOpsOrgUrl
-            value: $[ dependencies.LoadConfig.outputs['ParseConfig.azureDevOpsOrgUrl'] ]
-          - name: windowsHelloWaitSeconds
-            value: ${{ parameters.windowsHelloWaitSeconds }}
-        steps:
-          - download: deployAgentsHelm
-            artifact: agent-config
-          - task: PowerShell@2
-            displayName: Query Windows pool via REST
-            env:
-              AZDO_PAT: $(AZDO_PAT)
-            inputs:
-              targetType: inline
-              pwsh: true
-              script: |
-                Set-StrictMode -Version Latest
-                $ErrorActionPreference = 'Stop'
-                $pat = $env:AZDO_PAT
-                if(-not $pat){ throw 'AZDO_PAT missing' }
-                  $cfgPath = Join-Path $env:PIPELINE_WORKSPACE 'deployAgentsHelm/agent-config/config.json'
-                  if(-not (Test-Path $cfgPath)){ throw "Config artifact not found at $cfgPath" }
-                  $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
-                  $instance = $cfg.instanceNumber
-                  $orgUrl = $cfg.azureDevOpsOrgUrl
-                $poolName = "KubernetesPoolWindows$instance"
-                $authHeader = 'Basic ' + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(':' + $pat))
-                $headers = @{ Authorization = $authHeader }
-                $apiVersion = '7.1-preview.1'
-                Write-Host "Verifying pool '$poolName' via REST"
-                $poolResp = Invoke-RestMethod -Method Get -Uri "$orgUrl/_apis/distributedtask/pools?poolName=$([Uri]::EscapeDataString($poolName))&api-version=$apiVersion" -Headers $headers -ErrorAction Stop
-                if($poolResp.count -eq 0){ throw "Pool '$poolName' not found" }
-                $poolId = $poolResp.value[0].id
-                $agents = Invoke-RestMethod -Method Get -Uri "$orgUrl/_apis/distributedtask/pools/$poolId/agents?api-version=$apiVersion" -Headers $headers -ErrorAction Stop
-                $online = @($agents.value | Where-Object { $_.status -eq 'online' })
-                if($online.Count -eq 0){ throw "No online agents found in pool '$poolName'" }
-                Write-Host "Windows agent online: $($online[0].name)"
           - task: PowerShell@2
             name: TriggerSample
             displayName: Trigger sample pipeline on self-hosted Windows pool
@@ -338,7 +253,6 @@ stages:
                 $ErrorActionPreference = 'Stop'
                 $pat = $env:AZDO_PAT
                 if(-not $pat){ throw 'AZDO_PAT missing' }
-                # Read config artifact locally so we don't depend on variable expansion
                 $cfgPath = Join-Path $env:PIPELINE_WORKSPACE 'deployAgentsHelm/agent-config/config.json'
                 if(-not (Test-Path $cfgPath)){ throw "Config artifact not found at $cfgPath" }
                 $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
@@ -349,31 +263,24 @@ stages:
                 $pipelineName = '$(samplePipelineNameHelm)'
                 Write-Host "Triggering sample pipeline '$pipelineName' for instance $instance (os=windows)"
 
-                # Ensure az devops extension is available and configured
                 $null = & az --version 2>$null
                 if($LASTEXITCODE -ne 0){ throw 'Azure CLI (az) not found on PATH; unable to trigger pipeline via az CLI' }
-                # Install azure-devops extension if missing
                 $ext = (& az extension list --query "[?name=='azure-devops']" -o json) | ConvertFrom-Json
                 if(-not $ext){ Write-Host 'Installing azure-devops extension'; az extension add --name azure-devops --yes | Out-Null }
 
-                # Configure defaults and auth
                 $env:AZURE_DEVOPS_EXT_PAT = $pat
                 & az devops configure --defaults organization=$orgUrl project=$project | Out-Null
 
-                # Queue the pipeline run with parameters (the sample pipeline defines parameters)
                 $runJson = & az pipelines run --name $pipelineName --parameters instanceNumber=$instance os=windows helloWaitSeconds=$(windowsHelloWaitSeconds) --output json 2>&1
                 if($LASTEXITCODE -ne 0){ Write-Error $runJson; throw 'Failed to queue sample pipeline run via az pipelines run' }
                 $runObj = $runJson | Out-String | ConvertFrom-Json
                 $runId = $runObj.id
                 if(-not $runId){ throw 'Could not determine run id from az pipelines run output' }
                 Write-Host "Queued pipeline run id: $runId"
-                # Export run id and a best-effort run URL as step outputs so the Summary can reference them
                 Write-Host "##vso[task.setvariable variable=sampleRunId;isOutput=true]$runId"
                 $runUrl = "$orgUrl/$project/_build/results?buildId=$runId&view=results"
                 Write-Host "##vso[task.setvariable variable=sampleRunUrl;isOutput=true]$runUrl"
 
-                # Poll run status until finished (robust to different az output shapes)
-                # Add a timeout so this step doesn't wait indefinitely. Defaults to 1800s (30m).
                 $state = $null; $result = $null
                 $maxSeconds = 1800
                 $interval = 5
@@ -383,24 +290,15 @@ stages:
                   Start-Sleep -Seconds $interval
                   $elapsed += $interval
                   $showRaw = & az pipelines runs show --id $runId --output json 2>&1 | Out-String
-                  try{
-                    $showObj = $showRaw | ConvertFrom-Json
-                  } catch {
-                    Write-Warning "Failed to parse az pipelines runs show output: $showRaw"
-                    if($elapsed -ge $maxSeconds){ throw "Timed out waiting for sample pipeline run to produce valid status after $maxSeconds seconds (runId=$runId)" }
-                    continue
-                  }
+                  try{ $showObj = $showRaw | ConvertFrom-Json } catch { Write-Warning "Failed to parse az pipelines runs show output: $showRaw"; if($elapsed -ge $maxSeconds){ throw "Timed out waiting for sample pipeline run to produce valid status after $maxSeconds seconds (runId=$runId)" }; continue }
                   if($null -eq $showObj){ Write-Host 'No run information yet'; if($elapsed -ge $maxSeconds){ throw "Timed out waiting for sample pipeline run to start after $maxSeconds seconds (runId=$runId)" }; continue }
-                  # az may return an object or an array
                   $info = if($showObj -is [System.Array]){ $showObj[0] } else { $showObj }
-                  # prefer 'state', fall back to 'status'
                   if($info.PSObject.Properties.Name -contains 'state'){ $state = $info.state } elseif($info.PSObject.Properties.Name -contains 'status'){ $state = $info.status }
                   if($info.PSObject.Properties.Name -contains 'result'){ $result = $info.result }
                   Write-Host "Sample run state=$state result=$result (elapsed=${elapsed}s)"
                   if($state -in @('completed','canceled','failed')){ break }
                   if($elapsed -ge $maxSeconds){ throw "Timed out waiting for sample pipeline run to complete after $maxSeconds seconds (runId=$runId). Last known state='$state' result='$result'" }
                 }
-                # Fetch final run info to be sure
                 $finalRaw = & az pipelines runs show --id $runId --output json 2>&1 | Out-String
                 $finalObj = $null
                 try{ $finalObj = $finalRaw | ConvertFrom-Json } catch { Write-Warning "Failed to parse final run show output: $finalRaw" }
@@ -418,24 +316,27 @@ stages:
       - job: Summary
         displayName: Validation Summary
         dependsOn:
-          - TestLinuxAgent
-          - TestWindowsAgent
+          - ValidateLinux
+          - ValidateWindows
         condition: succeededOrFailed()
         pool:
-          vmImage: ubuntu-latest
+          ${{ if parameters.useOnPremAgents }}:
+            name: UbuntuLatestPoolOnPrem
+          ${{ else }}:
+            vmImage: ubuntu-latest
         variables:
           - name: linuxResult
-            value: $[ dependencies.TestLinuxAgent.result ]
+            value: $[ dependencies.ValidateLinux.result ]
           - name: windowsResult
-            value: $[ dependencies.TestWindowsAgent.result ]
+            value: $[ dependencies.ValidateWindows.result ]
           - name: linuxRunId
-            value: $[ dependencies.TestLinuxAgent.outputs['TriggerSample.sampleRunId'] ]
+            value: $[ dependencies.ValidateLinux.outputs['TriggerSample.sampleRunId'] ]
           - name: linuxRunUrl
-            value: $[ dependencies.TestLinuxAgent.outputs['TriggerSample.sampleRunUrl'] ]
+            value: $[ dependencies.ValidateLinux.outputs['TriggerSample.sampleRunUrl'] ]
           - name: windowsRunId
-            value: $[ dependencies.TestWindowsAgent.outputs['TriggerSample.sampleRunId'] ]
+            value: $[ dependencies.ValidateWindows.outputs['TriggerSample.sampleRunId'] ]
           - name: windowsRunUrl
-            value: $[ dependencies.TestWindowsAgent.outputs['TriggerSample.sampleRunUrl'] ]
+            value: $[ dependencies.ValidateWindows.outputs['TriggerSample.sampleRunUrl'] ]
         steps:
           - download: deployAgentsHelm
             artifact: agent-config
