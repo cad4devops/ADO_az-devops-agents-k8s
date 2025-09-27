@@ -1,29 +1,25 @@
-# Build Linux self hosted agent Docker image 
-# Add an windows agent to agent pool  
 
+# Build and deploy self-hosted agents to Kubernetes (Linux)
 
-### Create the agent  
+This page documents building the Linux agent image and deploying it using the Helm chart.
 
-```  
-PS C:\> mkdir agent ; cd agent
-PS C:\agent> Add-Type -AssemblyName System.IO.Compression.FileSystem ; [System.IO.Compression.ZipFile]::ExtractToDirectory("$HOME\Downloads\vsts-agent-win-x64-3.234.0.zip", "$PWD")
-```  
+Build image (example)
 
-### Configure the agentDetailed instructions  
-
-```
-PS C:\agent> .\config.cmd  
+```powershell
+cd azsh-linux-agent
+pwsh ./01-build-and-push.ps1 -ImageTag 2025-09-20 -Registry youracr.azurecr.io
 ```
 
-### Optionally run the agent interactively  
-If you didn't run as a service above:  
+Deploy with Helm
 
+```bash
+helm upgrade --install az-selfhosted-agents ./helm-charts-v2 -n az-devops --create-namespace -f values.secret.yaml
 ```
-PS C:\agent> .\run.cmd 
-```
 
+Notes
 
+- The repository includes helper scripts to build and push images and to render Helm values. The deploy helper will use `ACR_ADO_USERNAME` and `ACR_ADO_PASSWORD` from the environment when performing authenticated pushes/pulls.
 
-https://vstsagentpackage.azureedge.net/agent/3.234.0/vsts-agent-win-x64-3.234.0.zip
+- If using environment credential fallbacks, both `ACR_ADO_USERNAME` and `ACR_ADO_PASSWORD` must be present or the helper will fail early. When Helm `--debug` is used the helper captures debug output and masks likely secrets before any artifact publishing.
 
 

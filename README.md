@@ -222,6 +222,24 @@ cp helm-charts/az-selfhosted-agents/values.yaml my-values.yaml
 ```bash
 ```
 
+---
+
+## Local helper & pipeline notes
+
+Small repository helpers and pipelines provide a few convenience and safety behaviors you should know about when running locally or from CI:
+
+* kubeconfig defaulting: the deploy/validate helpers default to `$env:KUBECONFIG` or the standard user kubeconfig (`~/.kube/config`) when a `-Kubeconfig` parameter is not supplied. This makes it easier to run the helpers locally without repeating the kubeconfig path.
+* Azure DevOps PAT fallback: where an Azure DevOps PAT parameter is accepted by a helper, the helpers will fall back to the `AZDO_PAT` environment variable if the parameter is not provided. This is a convenience for local runs but prefer explicit pipeline secrets in CI.
+* ACR credentials: if you provide container registry credentials via the environment variables `ACR_ADO_USERNAME` / `ACR_ADO_PASSWORD`, both must be supplied. The helpers will fail fast on partial credentials to avoid confusing authentication or image-push failures.
+* Wrapper script: to avoid PowerShell parser/tokenization fragility for complex CLI strings, use the provided wrapper script which spawns a child `pwsh` to execute the deploy helper. See `.azuredevops/scripts/run-deploy-selfhosted-agents-helm.ps1` for the wrapper usage.
+* Helm debug capture & masking: when helpers run Helm with `--debug` they capture full debug output to a temporary log. Before publishing the log as an artifact the helpers mask/redact common secret keys and values (for example PATs, `AZP_TOKEN`, docker registry passwords, and common secret key names like `personalAccessToken`, `password`, `pw`, `token`). This masked debug log can be published for diagnostics without leaking secrets.
+* Validation pipeline parameters: the validation pipeline exposes OS-specific wait-time parameters so the sample pipeline can tune timeouts:
+  * `linuxHelloWaitSeconds` (default: 120)
+  * `windowsHelloWaitSeconds` (default: 180)
+  The validate pipeline forwards these as literal numeric parameters into the sample pipeline to avoid shell interpolation issues.
+
+These notes are a short summary — see the `docs/` folder for complete guidance and the pipeline YAMLs under `.azuredevops/pipelines/` for exact parameter names and behavior.
+
 ### 3. Install Chart
 ```
 helm upgrade --install az-agents ./helm-charts/az-selfhosted-agents -n az-devops --create-namespace -f my-values.yaml
