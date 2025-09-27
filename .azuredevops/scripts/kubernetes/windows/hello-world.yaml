@@ -1,6 +1,6 @@
 parameters:
   - name: helloWaitSeconds
-    type: int
+    type: number
     default: 180
 
 steps:
@@ -18,7 +18,10 @@ steps:
   # powershell task to wait 300 seconds
   # powershell task to wait configurable seconds (default 180)
   - task: PowerShell@2
-    displayName: "Wait $(helloWaitSeconds) seconds (hello-world)"
+    displayName: "Wait ${{ parameters.helloWaitSeconds }} seconds (hello-world)"
     inputs:
       targetType: "inline"
-      script: "Start-Sleep -Seconds $([int]('$(helloWaitSeconds)'))"
+      script: |
+        # Use the templated numeric parameter directly; it will be expanded into the script.
+        $secs = ${{ parameters.helloWaitSeconds }}
+        Start-Sleep -Seconds $secs
