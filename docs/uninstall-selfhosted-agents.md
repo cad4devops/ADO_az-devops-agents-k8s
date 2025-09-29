@@ -34,6 +34,14 @@ Wrapper and output handling
 - When running locally, prefer the repository wrapper script that spawns a child `pwsh` process to execute the uninstall helper. This reduces argument-parsing fragility and avoids accidental token leakage in the local shell.
 - If the helper captures Helm debug output for debugging, any published artifact is masked to remove likely secrets (PATs, docker auth/password fields, `AZP_TOKEN`, and commonly used secret key names) before publishing.
 
+Kubeconfig & local-mode behavior
+
+- The uninstall pipeline and helper follow the same kubeconfig selection rules as the deploy flow:
+	- The pipeline may set `USE_AZURE_LOCAL` and pass `-UseAzureLocal` to the helper when the pipeline parameter `useAzureLocal` is true. This signals the helper to prefer local kubeconfig files.
+	- When `-UseAzureLocal` is present the helper prefers the `-KubeconfigAzureLocal` parameter (an explicit local kubeconfig filename) and will fall back to `-Kubeconfig` or legacy locations only if the AzureLocal file is missing.
+	- When `-UseAzureLocal` is not present the helper prefers an explicit `-Kubeconfig` or the `KUBECONFIG` env variable, and will attempt `az aks get-credentials` if no kubeconfig is available (this requires `az` on PATH and cluster identifiers in CI).
+	- The helper emits debug lines indicating which kubeconfig parameter was selected and whether it used a provided file, a local file, or fetched credentials via `az` so pipeline logs make the chosen path explicit.
+
 Troubleshooting
 
 - If resources remain, run `kubectl get all -n <namespace>` and inspect finalizers blocking deletion.

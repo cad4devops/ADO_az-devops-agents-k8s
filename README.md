@@ -351,12 +351,22 @@ This repository includes several key Azure DevOps pipeline YAML files used to de
     Why this change: Azure DevOps can evaluate job-level conditions before task outputs are available which can cause expressions that reference cross-stage outputs to resolve to Null. Computing pool names in `ParseConfig` (LoadConfig) and doing a short runtime check inside each Validate job (CheckShouldRun) gives deterministic, observable behavior and clearer logs.
 
     Verification tips: run the pipeline and inspect the LoadConfig -> ParseConfig log for "Exported ..." lines (the ParseConfig task prints the values it emits). Then inspect each Validate job's `Check if ... validation should run` log — it will show whether the job will proceed and the job-local `poolName` used by the Poll step.
-- Run-on self‑hosted pool sample: `.azuredevops/pipelines/run-on-selfhosted-pool-sample.yml`
-  - Docs: `docs/run-on-selfhosted-pool-sample.md` — Minimal sample pipeline to exercise agents.
-- Uninstall self‑hosted agents: `.azuredevops/pipelines/uninstall-selfhosted-agents.yml`
-  - Docs: `docs/uninstall-selfhosted-agents.md` — Cleanup pipeline for helm releases, secrets, and optional registry cleanup.
-- Weekly agent images refresh: `.azuredevops/pipelines/weekly-agent-images-refresh.yaml`
-  - Docs: `docs/weekly-agent-pipeline.md` — Scheduled weekly rebuild/push plus digest capture and artifacts.
+
+    * Note: kubeconfig / local-mode behavior
+      * The `deploy-selfhosted-agents-helm` pipeline sets an explicit `USE_AZURE_LOCAL` environment variable and will pass the `-UseAzureLocal` switch to the wrapper/script only when the pipeline parameter `useAzureLocal` is true. This prevents accidentally inferring "local" mode from the mere presence of a `KUBECONFIG` value (for example, after `az aks get-credentials` runs in non-local mode).
+      * Wrapper behavior: the deploy wrapper (`.azuredevops/scripts/run-deploy-selfhosted-agents-helm.ps1`) surfaces `KUBECONFIG` to the child by adding a `-Kubeconfig <path>` argument when `KUBECONFIG` is present in the task environment. It will only forward the `-UseAzureLocal` switch when the explicit `USE_AZURE_LOCAL` env var is truthy. The wrapper also emits lightweight debug lines to the pipeline log (for example: `DEBUG: USE_AZURE_LOCAL env='...' KUBECONFIG='...'` and whether it forwarded `-UseAzureLocal`).
+      * Helper selection rules: both deploy and uninstall helpers accept `-Kubeconfig` and `-KubeconfigAzureLocal`. Selection logic implemented in the helpers is:
+        - If `-UseAzureLocal` is provided, the helper prefers the `-KubeconfigAzureLocal` parameter (explicit local kubeconfig filename) and will fall back to `-Kubeconfig` or legacy locations only if the local file is missing.
+        - If `-UseAzureLocal` is not provided, the helper prefers an explicitly provided `-Kubeconfig` (absolute or resolved relative path) or the `KUBECONFIG` environment variable. If none is available, the helper will attempt to fetch AKS credentials via `az aks get-credentials` into a temporary kubeconfig (this requires `az` on PATH and the `aksResourceGroup`/`aksClusterName` information when running in CI).
+        - If credential fetching via `az` is not possible and no kubeconfig is provided, the helpers fail early with a clear message to avoid accidental operations against the wrong cluster.
+      * Visual/logging: the helpers now print which kubeconfig parameter was selected (debug) and use a green success message when the current kubectl context matches the expected cluster/context so pipeline readers can quickly spot a positive match.
+
+* Run-on self‑hosted pool sample: `.azuredevops/pipelines/run-on-selfhosted-pool-sample.yml`
+  * Docs: `docs/run-on-selfhosted-pool-sample.md` — Minimal sample pipeline to exercise agents.
+* Uninstall self‑hosted agents: `.azuredevops/pipelines/uninstall-selfhosted-agents.yml`
+  * Docs: `docs/uninstall-selfhosted-agents.md` — Cleanup pipeline for helm releases, secrets, and optional registry cleanup.
+* Weekly agent images refresh: `.azuredevops/pipelines/weekly-agent-images-refresh.yaml`
+  * Docs: `docs/weekly-agent-pipeline.md` — Scheduled weekly rebuild/push plus digest capture and artifacts.
 
 ---
 

@@ -6,14 +6,16 @@ Top-level docs
 
 - `deploy-selfhosted-agents.md` — Helm deployment pipeline and guidance.
 - `validate-selfhosted-agents.md` — Pipeline to validate agent registration and sample job runs.
- - `run-on-selfhosted-pool-sample.md` — Minimal sample pipeline showing how to target the self‑hosted pool.
- - `uninstall-selfhosted-agents.md` — Cleanup pipeline & steps to remove releases and secrets.
- - `weekly-agent-pipeline.md` — Details for the scheduled weekly image rebuild & push pipeline.
-
-Note: `validate-selfhosted-agents.md` and `deploy-selfhosted-agents.md` now support a `useOnPremAgents` boolean pipeline parameter to toggle whether CI jobs run on the repository's on‑prem pool (for example `UbuntuLatestPoolOnPrem`) or use the hosted `ubuntu-latest` pool. This parameter is separate from `useAzureLocal`, which controls where kubeconfig is sourced from.
 - `run-on-selfhosted-pool-sample.md` — Minimal sample pipeline showing how to target the self‑hosted pool.
 - `uninstall-selfhosted-agents.md` — Cleanup pipeline & steps to remove releases and secrets.
 - `weekly-agent-pipeline.md` — Details for the scheduled weekly image rebuild & push pipeline.
+
+Note: `validate-selfhosted-agents.md` and `deploy-selfhosted-agents.md` now support a `useOnPremAgents` boolean pipeline parameter to toggle whether CI jobs run on the repository's on‑prem pool (for example `UbuntuLatestPoolOnPrem`) or use the hosted `ubuntu-latest` pool. This parameter is separate from `useAzureLocal`, which controls where kubeconfig is sourced from.
+
+Important: `useAzureLocal` and kubeconfig handling
+
+- The deploy pipeline sets an explicit `USE_AZURE_LOCAL` environment variable and will pass `-UseAzureLocal` to the wrapper/script when `useAzureLocal` is true. This prevents accidentally inferring local mode from a `KUBECONFIG` value that may have been set by `az aks get-credentials` in non-local runs.
+- The wrapper script `.azuredevops/scripts/run-deploy-selfhosted-agents-helm.ps1` honors the explicit `USE_AZURE_LOCAL` environment variable and only forwards `-UseAzureLocal` when the flag is truthy. The deploy helper script accepts `-Kubeconfig` and `-KubeconfigAzureLocal` and prefers the AzureLocal variant when local mode is requested.
 
 Subfolders
 
