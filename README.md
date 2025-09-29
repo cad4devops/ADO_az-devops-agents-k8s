@@ -384,15 +384,16 @@ If you're an automated agent or contributor editing scripts or pipeline YAML, re
 
 | Maintainer | Profile |
 |------------|---------|
-| Anvesh Muppeda | [profile](https://anveshmuppeda.github.io/profile/) |
+| Emmanuel Knafo | [profile](https://github.com/emmanuel-knafo/) |
+| AJ Enns | [profile](https://github.com/aj-enns/) |
 
 ---
 
 ## Contact
 
-* Email: <muppedaanvesh@gmail.com>
-* LinkedIn: [Anvesh](https://www.linkedin.com/in/anvesh-muppeda-5a0a83167)
-* Issues: [GitHub Tracker](https://github.com/devopsabcs-engineering/az-devops-agents-k8s/issues)
+* LinkedIn: [Emmanuel Knafo](https://www.linkedin.com/in/emmanuelknafo/)
+* LinkedIn: [AJ Enns](https://www.linkedin.com/in/ajenns/)
+* Issues: [GitHub Tracker](https://github.com/cad4devops/Cad4DevOps-ADO_az-devops-agents-k8s/issues)
 
 ---
 
