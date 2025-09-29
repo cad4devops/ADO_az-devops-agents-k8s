@@ -17,9 +17,10 @@ and Terminating namespaces can be forcibly cleared of finalizers if necessary.
 
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $false)] [string] $Kubeconfig = "my-workload-cluster-dev-014-kubeconfig.yaml",
-    [Parameter(Mandatory = $false)] [string] $KubeconfigFolder,    
     [Parameter(Mandatory = $false)] [string] $InstanceNumber = '003',
+    [Parameter(Mandatory = $false)] [string] $Kubeconfig = "aks-ado-agents-$InstanceNumber",
+    [Parameter(Mandatory = $false)] [string] $KubeconfigAzureLocal = "my-workload-cluster-dev-014-kubeconfig.yaml",
+    [Parameter(Mandatory = $false)] [string] $KubeconfigFolder,        
     [Parameter(Mandatory = $false)] [string] $KubeContext = "aks-ado-agents-$InstanceNumber",
     [Parameter(Mandatory = $false)] [string] $KubeContextAzureLocal = "my-workload-cluster-dev-014-admin@my-workload-cluster-dev-014",
     [Parameter(Mandatory = $false)] [switch] $UseAzureLocal,
@@ -101,32 +102,78 @@ if ($AzureDevOpsOrgUrl -and -not $AzDevOpsUrl) { $AzDevOpsUrl = $AzureDevOpsOrgU
 $userProfile = $env:USERPROFILE; if (-not $userProfile) { $userProfile = $env:HOME }
 if ($KubeconfigFolder) { $effectiveKubeFolder = $KubeconfigFolder } elseif ($userProfile) { $effectiveKubeFolder = Join-Path $userProfile '.kube' } else { $effectiveKubeFolder = Join-Path ([System.IO.Path]::GetTempPath()) '.kube' }
 
-if (-not $UseAzureLocal.IsPresent) {
-    # Non-local: strictly fetch credentials from AKS via az CLI and fail fast on errors
-    Write-Host 'UseAzureLocal not set; fetching AKS credentials via az CLI.'
-    if (-not (Get-Command az -ErrorAction SilentlyContinue)) { Fail "Azure CLI (az) not found in PATH. Install Azure CLI or run with -UseAzureLocal and provide a local kubeconfig." }
-    if (-not $AksResourceGroup -or -not $AksClusterName) { Fail "To fetch AKS credentials the script requires -AksResourceGroup and -AksClusterName when -UseAzureLocal is not set." }
-    try { $acct = az account show --query id -o tsv 2>$null } catch { Fail "Failed to query Azure account (az account show). Ensure az is logged in. Error: $($_.Exception.Message)" }
-    if (-not $acct) { Fail 'No Azure subscription found in az CLI context. Login (az login) or set subscription before running this script.' }
+# Decide which input parameter to honour for kubeconfig based on UseAzureLocal
+$effectiveKubeParamName = if ($UseAzureLocal.IsPresent) { 'KubeconfigAzureLocal' } else { 'Kubeconfig' }
+$effectiveKubeParam = if ($UseAzureLocal.IsPresent) { $KubeconfigAzureLocal } else { $Kubeconfig }
 
-    $tempBase = if ($env:AGENT_TEMPDIRECTORY) { $env:AGENT_TEMPDIRECTORY } else { [System.IO.Path]::GetTempPath() }
-    $kubeTmp = Join-Path $tempBase 'kubeconfig'
-    Write-Host "Fetching AKS credentials for cluster '$AksClusterName' in resource group '$AksResourceGroup' into $kubeTmp"
-    try { & az aks get-credentials --resource-group $AksResourceGroup --name $AksClusterName --file $kubeTmp --overwrite-existing } catch { Fail "az aks get-credentials failed: $($_.Exception.Message)" }
-    if (-not (Test-Path $kubeTmp)) { Fail "az aks get-credentials did not produce a kubeconfig at expected path: $kubeTmp" }
-    $env:KUBECONFIG = (Resolve-Path $kubeTmp).Path
-    Write-Host "Set KUBECONFIG to $env:KUBECONFIG"
+Write-Host "DEBUG: UseAzureLocal.IsPresent=$($UseAzureLocal.IsPresent); selected param=$effectiveKubeParamName; value='$effectiveKubeParam'"
+
+if (-not $UseAzureLocal.IsPresent) {
+    # Non-local: prefer a provided kubeconfig file (pipeline may pass a KUBECONFIG path). If none provided or file missing, fetch via az.
+    $provided = $effectiveKubeParam
+    $usedProvided = $false
+    if ($provided) {
+        try {
+            $isAbs = [System.IO.Path]::IsPathRooted($provided)
+        } catch { $isAbs = $false }
+        if ($isAbs -and (Test-Path $provided)) {
+            $env:KUBECONFIG = (Resolve-Path $provided).Path
+            $usedProvided = $true
+            Write-Host "Using provided kubeconfig file (absolute): $env:KUBECONFIG"
+        }
+        elseif (-not $isAbs) {
+            # Try resolving relative to effective folder
+            $candidate = Join-Path $effectiveKubeFolder $provided
+            if (Test-Path $candidate) {
+                $env:KUBECONFIG = (Resolve-Path $candidate).Path
+                $usedProvided = $true
+                Write-Host "Using provided kubeconfig file (relative resolved): $env:KUBECONFIG"
+            }
+        }
+    }
+
+    if (-not $usedProvided) {
+        Write-Host 'No usable provided kubeconfig found; fetching AKS credentials via az CLI.'
+        if (-not (Get-Command az -ErrorAction SilentlyContinue)) { Fail "Azure CLI (az) not found in PATH. Install Azure CLI or run with -UseAzureLocal and provide a local kubeconfig." }
+        if (-not $AksResourceGroup -or -not $AksClusterName) { Fail "To fetch AKS credentials the script requires -AksResourceGroup and -AksClusterName when -UseAzureLocal is not set and no kubeconfig was provided." }
+        try { $acct = az account show --query id -o tsv 2>$null } catch { Fail "Failed to query Azure account (az account show). Ensure az is logged in. Error: $($_.Exception.Message)" }
+        if (-not $acct) { Fail 'No Azure subscription found in az CLI context. Login (az login) or set subscription before running this script.' }
+
+        $tempBase = if ($env:AGENT_TEMPDIRECTORY) { $env:AGENT_TEMPDIRECTORY } else { [System.IO.Path]::GetTempPath() }
+        $kubeTmp = Join-Path $tempBase 'kubeconfig'
+        Write-Host "Fetching AKS credentials for cluster '$AksClusterName' in resource group '$AksResourceGroup' into $kubeTmp"
+        try { & az aks get-credentials --resource-group $AksResourceGroup --name $AksClusterName --file $kubeTmp --overwrite-existing } catch { Fail "az aks get-credentials failed: $($_.Exception.Message)" }
+        if (-not (Test-Path $kubeTmp)) { Fail "az aks get-credentials did not produce a kubeconfig at expected path: $kubeTmp" }
+        $env:KUBECONFIG = (Resolve-Path $kubeTmp).Path
+        Write-Host "Set KUBECONFIG to $env:KUBECONFIG"
+    }
 }
 else {
-    # Local mode: resolve local kubeconfig by joining folder and filename
-    if ($Kubeconfig) {
-        try { $isAbs = [System.IO.Path]::IsPathRooted($Kubeconfig) } catch { $isAbs = $false }
-        if ($isAbs) { $resolvedLocalKube = $Kubeconfig } else { $resolvedLocalKube = Join-Path $effectiveKubeFolder $Kubeconfig }
+    # Local mode: prefer KubeconfigAzureLocal (explicit local kubeconfig filename), then fall back to Kubeconfig if provided, else legacy locations
+    $localCandidate = $null
+    if ($effectiveKubeParam) {
+        try { $isAbs = [System.IO.Path]::IsPathRooted($effectiveKubeParam) } catch { $isAbs = $false }
+        if ($isAbs) { $localCandidate = $effectiveKubeParam }
+        else { $localCandidate = Join-Path $effectiveKubeFolder $effectiveKubeParam }
     }
-    else { $resolvedLocalKube = Join-Path $effectiveKubeFolder 'config\my-workload-cluster-dev-014-kubeconfig.yaml' }
+    else {
+        $localCandidate = Join-Path $effectiveKubeFolder 'config\my-workload-cluster-dev-014-kubeconfig.yaml'
+    }
 
-    if (Test-Path $resolvedLocalKube) { $env:KUBECONFIG = (Resolve-Path $resolvedLocalKube).Path; Write-Host "KUBECONFIG not provided; using local kubeconfig: $env:KUBECONFIG" }
-    else { $legacy = Join-Path $effectiveKubeFolder 'config'; if (Test-Path $legacy) { $env:KUBECONFIG = (Resolve-Path $legacy).Path; Write-Host "Using legacy kubeconfig at $env:KUBECONFIG" } else { Write-Warning "Local kubeconfig not found at either $resolvedLocalKube or $legacy; will attempt to use default kubectl context." } }
+    if (Test-Path $localCandidate) {
+        $env:KUBECONFIG = (Resolve-Path $localCandidate).Path
+        Write-Host "Using local kubeconfig: $env:KUBECONFIG"
+    }
+    else {
+        $legacy = Join-Path $effectiveKubeFolder 'config'
+        if (Test-Path $legacy) {
+            $env:KUBECONFIG = (Resolve-Path $legacy).Path
+            Write-Host "Using legacy kubeconfig at $env:KUBECONFIG"
+        }
+        else {
+            Write-Warning "Local kubeconfig not found at $localCandidate or $legacy; will attempt to use default kubectl context."
+        }
+    }
 }
 
 # verify tools
@@ -188,7 +235,7 @@ try {
             if (-not $UseAzureLocal.IsPresent) { Fail "Current kubectl context '$current' does not match expected context '$expectedCtx'. Aborting." }
             else { Write-Warning "Current kubectl context '$current' does not match expected context '$expectedCtx'. Uninstall will continue but may not target intended cluster." }
         }
-        else { Write-Host "Current kubectl context '$current' matches expected context '$expectedCtx'." }
+        else { Write-Host -ForegroundColor Green "Current kubectl context '$current' matches expected context '$expectedCtx'." }
     }
 }
 catch {

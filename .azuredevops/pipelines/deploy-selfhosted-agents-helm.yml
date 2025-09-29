@@ -68,13 +68,16 @@ stages:
       - job: HelmDeploy
         displayName: Deploy agents Helm chart
         pool:
-          ${{ if eq(parameters.useAzureLocal, true) }}:
+          ${{ if eq(parameters.useAzureLocal, false) }}:
+            ${{ if eq(parameters.useOnPremAgents, true) }}:
+              name: UbuntuLatestPoolOnPrem
+            ${{ else }}:
+              vmImage: ubuntu-latest
+          ${{ else }}:
             ${{ if ne(parameters.bootstrapPoolName, '') }}:
               name: ${{ parameters.bootstrapPoolName }}
-            ${{ if eq(parameters.bootstrapPoolName, '') }}:
-              vmImage: ubuntu-latest
-          ${{ if eq(parameters.useAzureLocal, false) }}:
-            vmImage: ubuntu-latest
+            ${{ else }}:
+              name: WindowsLatestPoolOnPrem
         steps:
           - checkout: self
 
@@ -245,8 +248,11 @@ stages:
               DEPLOY_LINUX: $(DEPLOY_LINUX)
               DEPLOY_WINDOWS: "${{ parameters.deployWindows }}"
               AZDO_ORG_URL: "${{ parameters.azureDevOpsOrgUrl }}"
+              USE_AZURE_LOCAL: "${{ parameters.useAzureLocal }}"
             inputs:
               targetType: filePath
+              ${{ if eq(parameters.useAzureLocal, true) }}:
+                arguments: '-UseAzureLocal'
               # Use POSIX-style forward slashes so the path resolves correctly on linux agents
               filePath: "$(Build.SourcesDirectory)/.azuredevops/scripts/run-deploy-selfhosted-agents-helm.ps1"
               pwsh: true

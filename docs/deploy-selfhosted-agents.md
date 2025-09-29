@@ -67,3 +67,15 @@ Notes on pool selection
 
 - `useAzureLocal` controls where the pipeline sources the cluster kubeconfig: when true it expects a secure-file kubeconfig (local/on‑prem); when false it will attempt `az aks get-credentials` for AKS clusters.
 - `useOnPremAgents` controls which pipeline pool the jobs run on (on‑prem pool vs hosted images). Set `useOnPremAgents: true` when you want validation or summary tasks to run on your internal on‑prem pool so they exercise the same agent environment your workloads will use.
+
+Wrapper & kubeconfig selection (current behavior)
+
+- The pipeline sets an explicit `USE_AZURE_LOCAL` environment variable and the deploy task will pass the `-UseAzureLocal` switch to the wrapper when the pipeline parameter `useAzureLocal` is true.
+- The wrapper (`.azuredevops/scripts/run-deploy-selfhosted-agents-helm.ps1`) will:
+  - Add `-Kubeconfig <path>` to the child deploy invocation when a `KUBECONFIG` environment variable is present (for example when the pipeline downloaded a secure-file kubeconfig or after `az aks get-credentials`).
+  - Only forward the `-UseAzureLocal` switch when the explicit `USE_AZURE_LOCAL` env var is truthy. This prevents inferring local-mode from a `KUBECONFIG` value that may have been set by other steps.
+  - Emit brief debug lines into the pipeline log indicating the `USE_AZURE_LOCAL` env value, `KUBECONFIG` path (if present), and whether `-UseAzureLocal` was forwarded.
+- Helper selection rules:
+  - If `-UseAzureLocal` is provided, helpers prefer `-KubeconfigAzureLocal` (explicit local kubeconfig filename) and fall back to `-Kubeconfig` or legacy locations only when the local file is missing.
+  - If `-UseAzureLocal` is not provided, helpers prefer an explicitly provided `-Kubeconfig` (absolute or relative resolved) or the `KUBECONFIG` environment variable. If none is available they attempt to fetch AKS credentials via `az aks get-credentials` into a temporary kubeconfig (requires `az` on PATH and cluster identifiers when running in CI).
+  - If no kubeconfig can be obtained the helpers fail early with a clear message to avoid operating against the wrong cluster.

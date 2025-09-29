@@ -76,13 +76,16 @@ stages:
       - job: Uninstall
         displayName: Uninstall resources
         pool:
-          ${{ if eq(parameters.useAzureLocal, true) }}:
+          ${{ if eq(parameters.useAzureLocal, false) }}:
+            ${{ if eq(parameters.useOnPremAgents, true) }}:
+              name: UbuntuLatestPoolOnPrem
+            ${{ else }}:
+              vmImage: ubuntu-latest
+          ${{ else }}:
             ${{ if ne(parameters.bootstrapPoolName, '') }}:
               name: ${{ parameters.bootstrapPoolName }}
-            ${{ if eq(parameters.bootstrapPoolName, '') }}:
-              vmImage: ubuntu-latest
-          ${{ if eq(parameters.useAzureLocal, false) }}:
-            vmImage: ubuntu-latest
+            ${{ else }}:
+              name: WindowsLatestPoolOnPrem
         steps:
           - checkout: self
 
@@ -205,6 +208,7 @@ stages:
                 if ('${{ parameters.removeWindows }}' -eq 'True') { $params.RemoveWindows = $true }
                 if ('${{ parameters.removeKeda }}' -eq 'True') { $params.RemoveKeda = $true }
                 if ('${{ parameters.deleteAgentPools }}' -eq 'True') { $params.DeleteAgentPools = $true }
+                if ('${{ parameters.useAzureLocal }}' -eq 'True') { $params.UseAzureLocal = $true }
                 $params.ConfirmDeletion = '${{ parameters.confirmDeletion }}'
 
                 # Mask AZDO token for logging
@@ -219,6 +223,7 @@ stages:
                 if ($params.RemoveWindows) { $logParts += '-RemoveWindows' }
                 if ($params.RemoveKeda) { $logParts += '-RemoveKeda' }
                 if ($params.DeleteAgentPools) { $logParts += '-DeleteAgentPools' }
+                if ('${{ parameters.useAzureLocal }}' -eq 'True') { $logParts += '-UseAzureLocal' }
                 $logParts += "-ConfirmDeletion $($params.ConfirmDeletion)"
 
                 Write-Host "Invoking uninstall script: $scriptPath with args: $($logParts -join ' ')"

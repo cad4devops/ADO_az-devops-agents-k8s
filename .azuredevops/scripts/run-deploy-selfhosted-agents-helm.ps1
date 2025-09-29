@@ -72,14 +72,23 @@ if (ToBool $envDeployWindows) { $psParams.DeployWindows = $true }
 $masked = if ($envAzDo) { '***' } else { '(none)' }
 Write-Host "Invoking $scriptPath with Instance=$envInstance, AcrName=$envAcrName, AzureDevOpsOrgUrl=$envAzOrg, AzDoToken=$masked, DeployLinux=$(ToBool $envDeployLinux), DeployWindows=$(ToBool $envDeployWindows)"
 
+# Debug: surface the explicit USE_AZURE_LOCAL and KUBECONFIG values so pipeline logs show the mode selected
+Write-Host "DEBUG: USE_AZURE_LOCAL env='${env:USE_AZURE_LOCAL}' KUBECONFIG='${env:KUBECONFIG}'"
+
 # Call the deploy script in a new PowerShell process to avoid in-process parsing/context issues
 # Build an argument list and pass typed switches/values
 $argList = @()
 if ($envKube) { $argList += '-Kubeconfig'; $argList += $envKube }
-# If the wrapper was given a kubeconfig path (from a previous AzureCLI or secure-file task)
-# tell the deploy script that this is a local/on-prem kubeconfig to ensure it uses the
-# expected local kube context and avoids attempting an az login/fetch.
-if ($envKube) { $argList += '-UseAzureLocal' }
+# Only treat the kubeconfig as 'local' when the pipeline explicitly requested local mode.
+# The pipeline sets USE_AZURE_LOCAL env var (true/false) and we should honor that instead
+# of inferring local mode from the mere presence of KUBECONFIG (which is also set when
+# az aks get-credentials runs in non-local mode).
+if ($env:USE_AZURE_LOCAL -and (ToBool $env:USE_AZURE_LOCAL)) {
+    Write-Host "DEBUG: Wrapper detected USE_AZURE_LOCAL=true; forwarding -UseAzureLocal to child"
+    $argList += '-UseAzureLocal'
+} else {
+    Write-Host "DEBUG: Wrapper not forwarding -UseAzureLocal (USE_AZURE_LOCAL='${env:USE_AZURE_LOCAL}')"
+}
 $argList += '-InstanceNumber'; $argList += $envInstance
 $argList += '-AcrName'; $argList += $envAcrName
 if ($envAcrUser) { $argList += '-AcrUsername'; $argList += $envAcrUser }
