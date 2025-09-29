@@ -247,6 +247,27 @@ stages:
                   Write-Host $finalRaw
                   Write-Host 'Sample pipeline final run object:'
                   if($finalObj){ $finalObj | ConvertTo-Json -Depth 5 | Write-Host } else { Write-Host '<could not parse final JSON>' }
+                  # Attempt to fetch timeline and per-step logs for the failed run to aid debugging
+                  Write-Host "Attempting to fetch timeline and logs for runId=$runId"
+                  try{
+                    $timelineRaw = & az rest --method get --uri "$orgUrl/_apis/build/builds/$runId/timeline?api-version=7.1" 2>&1 | Out-String
+                    Write-Host "Timeline raw:"
+                    Write-Host $timelineRaw
+                    try{ $timelineObj = $timelineRaw | ConvertFrom-Json } catch { $timelineObj = $null }
+                    if($timelineObj -and $timelineObj.records){
+                      foreach($rec in $timelineObj.records){
+                        if($rec.log -and $rec.log.id){
+                          $logId = $rec.log.id
+                          Write-Host "Fetching log id $logId ($($rec.name))"
+                          $logRaw = & az rest --method get --uri "$orgUrl/_apis/build/builds/$runId/logs/$logId?api-version=7.1" 2>&1 | Out-String
+                          Write-Host "==== Log: $($rec.name) ===="
+                          Write-Host $logRaw
+                        }
+                      }
+                    } else {
+                      Write-Host 'No timeline records found or failed to parse timeline.'
+                    }
+                  } catch { Write-Warning "Failed to fetch logs via az rest: $_" }
                   throw "Sample pipeline run did not succeed (result=$finalResult)"
                 }
           - task: PowerShell@2
@@ -429,6 +450,27 @@ stages:
                   Write-Host $finalRaw
                   Write-Host 'Sample pipeline final run object:'
                   if($finalObj){ $finalObj | ConvertTo-Json -Depth 5 | Write-Host } else { Write-Host '<could not parse final JSON>' }
+                  # Attempt to fetch timeline and per-step logs for the failed run to aid debugging
+                  Write-Host "Attempting to fetch timeline and logs for runId=$runId"
+                  try{
+                    $timelineRaw = & az rest --method get --uri "$orgUrl/_apis/build/builds/$runId/timeline?api-version=7.1" 2>&1 | Out-String
+                    Write-Host "Timeline raw:"
+                    Write-Host $timelineRaw
+                    try{ $timelineObj = $timelineRaw | ConvertFrom-Json } catch { $timelineObj = $null }
+                    if($timelineObj -and $timelineObj.records){
+                      foreach($rec in $timelineObj.records){
+                        if($rec.log -and $rec.log.id){
+                          $logId = $rec.log.id
+                          Write-Host "Fetching log id $logId ($($rec.name))"
+                          $logRaw = & az rest --method get --uri "$orgUrl/_apis/build/builds/$runId/logs/$logId?api-version=7.1" 2>&1 | Out-String
+                          Write-Host "==== Log: $($rec.name) ===="
+                          Write-Host $logRaw
+                        }
+                      }
+                    } else {
+                      Write-Host 'No timeline records found or failed to parse timeline.'
+                    }
+                  } catch { Write-Warning "Failed to fetch logs via az rest: $_" }
                   throw "Sample pipeline run did not succeed (result=$finalResult)"
                 }
           - task: PowerShell@2
