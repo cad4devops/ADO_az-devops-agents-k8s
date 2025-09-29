@@ -343,6 +343,14 @@ This repository includes several key Azure DevOps pipeline YAML files used to de
   - Docs: `docs/deploy-selfhosted-agents.md` — Helm deployment of agent pools, secrets management, and optional KEDA wiring.
 - Validate self‑hosted agents: `.azuredevops/pipelines/validate-selfhosted-agents.yml`
   - Docs: `docs/validate-selfhosted-agents.md` — Verifies agent registration and can queue the sample job to validate execution.
+  - Note (recent change): the Helm validate pipeline used by the `deploy-selfhosted-agents-helm` flow has been reworked into a 3-stage layout to make pool-name computation deterministic and robust against Azure DevOps runtime-evaluation timing issues. The stages are:
+    1. LoadConfig — downloads the `agent-config` artifact and runs a `ParseConfig` task that computes and emits job outputs (instanceNumber, deployLinux, deployWindows, azureDevOpsOrgUrl, useAzureLocal, poolNameLinux, poolNameWindows).
+    2. Validate — two parallel jobs (Linux and Windows). Each job downloads the same artifact and runs a short `CheckShouldRun` step that reads `config.json` and sets job-local variables (shouldRun, poolName, instanceNumber, etc.). The Poll and TriggerSample steps in the job are gated on `shouldRun` so they only execute when the config requests it. This avoids fragile cross-stage condition evaluation while keeping the computed pool names visible to the jobs.
+    3. Summary — collects trigger results (when present) and emits a small validation summary attachment.
+
+    Why this change: Azure DevOps can evaluate job-level conditions before task outputs are available which can cause expressions that reference cross-stage outputs to resolve to Null. Computing pool names in `ParseConfig` (LoadConfig) and doing a short runtime check inside each Validate job (CheckShouldRun) gives deterministic, observable behavior and clearer logs.
+
+    Verification tips: run the pipeline and inspect the LoadConfig -> ParseConfig log for "Exported ..." lines (the ParseConfig task prints the values it emits). Then inspect each Validate job's `Check if ... validation should run` log — it will show whether the job will proceed and the job-local `poolName` used by the Poll step.
 - Run-on self‑hosted pool sample: `.azuredevops/pipelines/run-on-selfhosted-pool-sample.yml`
   - Docs: `docs/run-on-selfhosted-pool-sample.md` — Minimal sample pipeline to exercise agents.
 - Uninstall self‑hosted agents: `.azuredevops/pipelines/uninstall-selfhosted-agents.yml`
@@ -352,23 +360,36 @@ This repository includes several key Azure DevOps pipeline YAML files used to de
 
 ---
 
-## Maintainers <a id="maintainers"></a>
+
+
+## Docs index
+
+Comprehensive docs live in the `docs/` folder. Start at `docs/README.md` for a brief index and pointers.
+
+## Copilot / automation guidance
+
+If you're an automated agent or contributor editing scripts or pipeline YAML, read `copilot-instructions.md` at the repository root before making changes. It contains runbooks, safe mock-run helpers, known pitfalls (PowerShell interpolation and ACR tagging), and pipeline authoring tips.
+
+## Maintainers
+
 | Maintainer | Profile |
 |------------|---------|
-| Anvesh Muppeda | <https://anveshmuppeda.github.io/profile/> |
+| Anvesh Muppeda | [profile](https://anveshmuppeda.github.io/profile/) |
 
 ---
 
-## Contact <a id="contact"></a>
-* Email: muppedaanvesh@gmail.com  
-* LinkedIn: [Anvesh](https://www.linkedin.com/in/anvesh-muppeda-5a0a83167)  
-* Issues: [GitHub Tracker](https://github.com/devopsabcs-engineering/az-devops-agents-k8s/issues)  
+## Contact
+
+* Email: <muppedaanvesh@gmail.com>
+* LinkedIn: [Anvesh](https://www.linkedin.com/in/anvesh-muppeda-5a0a83167)
+* Issues: [GitHub Tracker](https://github.com/devopsabcs-engineering/az-devops-agents-k8s/issues)
 
 ---
 
 ## Feedback
-We welcome your feedback. Open an issue or discussion and help shape future enhancements.  
 
-<p align="center"><a href="#top">Back to top ▲</a></p>
+We welcome your feedback. Open an issue or discussion and help shape future enhancements.
+
+Back to top: see the top of this README
 
 

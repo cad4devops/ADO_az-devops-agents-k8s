@@ -26,21 +26,48 @@ parameters:
     displayName: Uninstall KEDA and remove CRDs
   - name: instanceNumber
     type: string
-    default: '003'
+    default: "003"
     displayName: Instance number suffix (e.g. 003)
+  - name: AZURE_SERVICE_CONNECTION
+    type: string
+    default: "DOS_DevOpsShield_Prod"
+    values:
+      - "DOS_DevOpsShield_Prod"
+      - "ADO_SvcConnRgScopedProd"
+  - name: ACR_NAME
+    type: string
+    default: "cragents003c66i4n7btfksg"
+    values:
+      - "cragents003c66i4n7btfksg"
+      #- "cragentssgvhe4aipy37o"
+  # legacy registry removed: "cragentssgvhe4aipy37o"
+  - name: useAzureLocal
+    type: boolean
+    default: false
+  - name: aksResourceGroup
+    type: string
+    default: "rg-aks-ado-agents-003"
+  - name: aksClusterName
+    type: string
+    default: "aks-ado-agents-003"
   - name: azureDevOpsOrgUrl
     type: string
-    default: 'https://dev.azure.com/cad4devops'
+    default: "https://dev.azure.com/cad4devops"
   - name: confirmDeletion
     type: string
-    default: 'YES'
+    default: "YES"
     displayName: Type YES to actually perform deletions
   - name: bootstrapPoolName
     type: string
-    default: 'KubernetesPoolWindows'
+    default: "KubernetesPoolWindows"
+  - name: useOnPremAgents
+    type: boolean
+    default: true # Set to true to use on-premises agents, false to use cloud agents
 
 variables:
   - group: ADO_az-devops-agents-k8s
+  - name: azureSubscription
+    value: ${{ parameters.AZURE_SERVICE_CONNECTION }}
 
 stages:
   - stage: UninstallHelm
@@ -49,9 +76,12 @@ stages:
       - job: Uninstall
         displayName: Uninstall resources
         pool:
-          ${{ if ne(parameters.bootstrapPoolName, '') }}:
-            name: ${{ parameters.bootstrapPoolName }}
-          ${{ if eq(parameters.bootstrapPoolName, '') }}:
+          ${{ if eq(parameters.useAzureLocal, true) }}:
+            ${{ if ne(parameters.bootstrapPoolName, '') }}:
+              name: ${{ parameters.bootstrapPoolName }}
+            ${{ if eq(parameters.bootstrapPoolName, '') }}:
+              vmImage: ubuntu-latest
+          ${{ if eq(parameters.useAzureLocal, false) }}:
             vmImage: ubuntu-latest
         steps:
           - checkout: self
@@ -66,42 +96,89 @@ stages:
                   Write-Error "confirmDeletion parameter must be 'YES' to proceed. Current: '${{ parameters.confirmDeletion }}'"
                 } else { Write-Host 'Confirmation OK.' }
 
-          - task: DownloadSecureFile@1
-            name: DownloadKubeconfig
-            displayName: Download AKS kubeconfig (secure file)
-            inputs:
-              secureFile: AKS_my-workload-cluster-dev-014-kubeconfig_file
+          - ${{ if eq(parameters.useAzureLocal, true) }}:
+              - task: DownloadSecureFile@1
+                name: DownloadKubeconfig
+                displayName: Download AKS kubeconfig (secure file)
+                inputs:
+                  secureFile: AKS_my-workload-cluster-dev-014-kubeconfig_file
+          - ${{ if eq(parameters.useAzureLocal, false) }}:
+              - task: AzureCLI@2
+                displayName: Fetch AKS credentials (az aks get-credentials)
+                inputs:
+                  azureSubscription: $(azureSubscription)
+                  scriptType: bash
+                  scriptLocation: inlineScript
+                  inlineScript: |
+                    set -euo pipefail
+                    if [ -z "${{ parameters.aksResourceGroup }}" ] || [ -z "${{ parameters.aksClusterName }}" ]; then
+                      echo "AKS resource group or cluster name not provided. Provide aksResourceGroup and aksClusterName when useAzureLocal is false."
+                      exit 1
+                    fi
+                    KCFG="$AGENT_TEMPDIRECTORY/kubeconfig"
+                    echo "Fetching AKS credentials for ${{ parameters.aksClusterName }} in ${{ parameters.aksResourceGroup }} into $KCFG"
+                    az aks get-credentials --resource-group "${{ parameters.aksResourceGroup }}" --name "${{ parameters.aksClusterName }}" --file "$KCFG" --overwrite-existing
+                    echo "##vso[task.setvariable variable=KUBECONFIG]$KCFG"
 
-          - task: PowerShell@2
-            displayName: Prepare kubeconfig & ensure kubectl
-            inputs:
-              targetType: inline
-              pwsh: true
-              script: |
-                Set-StrictMode -Version Latest
-                $ErrorActionPreference = 'Stop'
-                $secureKubeConfig = '$(DownloadKubeconfig.secureFilePath)'
-                if(-not $secureKubeConfig){ throw 'DownloadSecureFile did not produce a path. Ensure the task name is DownloadKubeconfig.' }
-                $kubeconfigPath = Join-Path $env:AGENT_TEMPDIRECTORY 'kubeconfig'
-                Copy-Item -Path $secureKubeConfig -Destination $kubeconfigPath -Force
-                Write-Host "Copied kubeconfig to $kubeconfigPath"
-                Write-Host "##vso[task.setvariable variable=KUBECONFIG]$kubeconfigPath"
-                $kubectlCmd = Get-Command kubectl -ErrorAction SilentlyContinue
-                if(-not $kubectlCmd){
-                  Write-Host 'kubectl not found on PATH; downloading...'
-                  $url = 'https://dl.k8s.io/release/v1.29.4/bin/linux/amd64/kubectl'
-                  $kubectlPath = Join-Path $env:AGENT_TEMPDIRECTORY 'kubectl'
-                  Invoke-WebRequest -Uri $url -OutFile $kubectlPath
-                  chmod +x $kubectlPath
-                  Write-Host "##vso[task.prependpath]$($env:AGENT_TEMPDIRECTORY)"
-                  Write-Host "Downloaded kubectl to $kubectlPath and prepended AGENT_TEMPDIRECTORY to PATH"
-                } else { Write-Host "kubectl found at $($kubectlCmd.Path)" }
+          - ${{ if eq(parameters.useAzureLocal, true) }}:
+              - task: PowerShell@2
+                displayName: Prepare kubeconfig & ensure kubectl (secure file)
+                inputs:
+                  targetType: inline
+                  pwsh: true
+                  script: |
+                    Set-StrictMode -Version Latest
+                    $ErrorActionPreference = 'Stop'
+                    $secureKubeConfig = '$(DownloadKubeconfig.secureFilePath)'
+                    if([string]::IsNullOrEmpty($secureKubeConfig)){
+                      throw 'DownloadSecureFile did not produce a path. Ensure the task name is DownloadKubeconfig and useAzureLocal is true.'
+                    }
+                    $kubeconfigPath = Join-Path $env:AGENT_TEMPDIRECTORY 'kubeconfig'
+                    Copy-Item -Path $secureKubeConfig -Destination $kubeconfigPath -Force
+                    Write-Host "Copied kubeconfig to $kubeconfigPath"
+                    Write-Host "##vso[task.setvariable variable=KUBECONFIG]$kubeconfigPath"
+                    $kubectlCmd = Get-Command kubectl -ErrorAction SilentlyContinue
+                    if(-not $kubectlCmd){
+                      Write-Host 'kubectl not found on PATH; downloading...'
+                      $url = 'https://dl.k8s.io/release/v1.29.4/bin/linux/amd64/kubectl'
+                      $kubectlPath = Join-Path $env:AGENT_TEMPDIRECTORY 'kubectl'
+                      Invoke-WebRequest -Uri $url -OutFile $kubectlPath
+                      chmod +x $kubectlPath
+                      Write-Host "##vso[task.prependpath]$($env:AGENT_TEMPDIRECTORY)"
+                      Write-Host "Downloaded kubectl to $kubectlPath and prepended AGENT_TEMPDIRECTORY to PATH"
+                    } else { Write-Host "kubectl found at $($kubectlCmd.Path)" }
+          - ${{ if eq(parameters.useAzureLocal, false) }}:
+              - task: PowerShell@2
+                displayName: Prepare kubeconfig & ensure kubectl (AKS credentials)
+                inputs:
+                  targetType: inline
+                  pwsh: true
+                  script: |
+                    Set-StrictMode -Version Latest
+                    $ErrorActionPreference = 'Stop'
+                    # When useAzureLocal is false the previous AzureCLI step exported KUBECONFIG via pipeline variable
+                    $kubeconfigPath = $env:KUBECONFIG
+                    if([string]::IsNullOrEmpty($kubeconfigPath) -or -not (Test-Path $kubeconfigPath)){
+                      throw "KUBECONFIG not set or file not found. Ensure the AzureCLI step that fetched AKS credentials ran successfully. KUBECONFIG='$kubeconfigPath'"
+                    }
+                    Write-Host "Using kubeconfig at $kubeconfigPath"
+                    # Ensure kubectl is available or download it to AGENT_TEMPDIRECTORY
+                    $kubectlCmd = Get-Command kubectl -ErrorAction SilentlyContinue
+                    if(-not $kubectlCmd){
+                      Write-Host 'kubectl not found on PATH; downloading...'
+                      $url = 'https://dl.k8s.io/release/v1.29.4/bin/linux/amd64/kubectl'
+                      $kubectlPath = Join-Path $env:AGENT_TEMPDIRECTORY 'kubectl'
+                      Invoke-WebRequest -Uri $url -OutFile $kubectlPath
+                      chmod +x $kubectlPath
+                      Write-Host "##vso[task.prependpath]$($env:AGENT_TEMPDIRECTORY)"
+                      Write-Host "Downloaded kubectl to $kubectlPath and prepended AGENT_TEMPDIRECTORY to PATH"
+                    } else { Write-Host "kubectl found at $($kubectlCmd.Path)" }
 
           - task: HelmInstaller@1
             displayName: Install Helm client
             enabled: false
             inputs:
-              helmVersionToInstall: 'stable'
+              helmVersionToInstall: "stable"
 
           - task: PowerShell@2
             displayName: Uninstall resources (via repo script)
@@ -151,6 +228,11 @@ stages:
         displayName: Uninstall Summary
         dependsOn: Uninstall
         condition: always()
+        pool:
+          ${{ if parameters.useOnPremAgents }}:
+            name: UbuntuLatestPoolOnPrem
+          ${{ else }}:
+            vmImage: ubuntu-latest
         steps:
           - task: PowerShell@2
             displayName: Summarize uninstall

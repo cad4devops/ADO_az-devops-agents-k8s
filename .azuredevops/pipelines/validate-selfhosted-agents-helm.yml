@@ -16,11 +16,13 @@ parameters:
     default: 120
   - name: windowsHelloWaitSeconds
     type: number
-    default: 180
+    default: 120
   - name: useOnPremAgents
     type: boolean
-    default: false # Set to true to use on-premises agents, false to use cloud agents
-
+    default: true # Set to true to use on-premises agents, false to use cloud agents
+  - name: useAzureLocal
+    type: boolean
+    default: false
 resources:
   pipelines:
     - pipeline: deployAgentsHelm
@@ -33,8 +35,8 @@ variables:
     value: ADO_az-devops-agents-k8s-run-on-selfhosted-pool-sample-helm # changed to helm pipeline name
 
 stages:
-  - stage: Validate
-    displayName: Validate self-hosted agent pools
+  - stage: LoadConfig
+    displayName: Load agent-config and compute pool names
     jobs:
       - job: LoadConfig
         displayName: Load configuration artifact
@@ -48,7 +50,7 @@ stages:
             artifact: agent-config
           - task: PowerShell@2
             name: ParseConfig
-            displayName: Parse config.json
+            displayName: Parse config.json and compute pools
             inputs:
               targetType: inline
               pwsh: true
@@ -59,14 +61,35 @@ stages:
                 $cfg = Get-Content $path -Raw | ConvertFrom-Json
                 Write-Host "Loaded config:" ($cfg | ConvertTo-Json -Compress)
                 # Export as job output variables so downstream jobs can reference them
-                Write-Host "##vso[task.setvariable variable=instanceNumber;isOutput=true]$($cfg.instanceNumber)"
+                $instance = $cfg.instanceNumber
+                Write-Host "##vso[task.setvariable variable=instanceNumber;isOutput=true]$instance"
+                Write-Host "Exported instanceNumber=$instance"
                 Write-Host "##vso[task.setvariable variable=deployLinux;isOutput=true]$($cfg.deployLinux)"
+                Write-Host "Exported deployLinux=$($cfg.deployLinux)"
                 Write-Host "##vso[task.setvariable variable=deployWindows;isOutput=true]$($cfg.deployWindows)"
+                Write-Host "Exported deployWindows=$($cfg.deployWindows)"
                 Write-Host "##vso[task.setvariable variable=azureDevOpsOrgUrl;isOutput=true]$($cfg.azureDevOpsOrgUrl)"
+                Write-Host "Exported azureDevOpsOrgUrl=$($cfg.azureDevOpsOrgUrl)"
+                # Normalize useAzureLocal to 'True'/'False' strings for consistent comparison
+                $useAzureLocalVal = $false
+                try { $useAzureLocalVal = [bool]$cfg.useAzureLocal } catch { $useAzureLocalVal = $false }
+                $useStr = if($useAzureLocalVal) { 'True' } else { 'False' }
+                Write-Host "##vso[task.setvariable variable=useAzureLocal;isOutput=true]$useStr"
+                Write-Host "Exported useAzureLocal=$useStr"
+                # Compute pool names so downstream jobs don't need runtime expressions
+                $poolNameLinux = if($useAzureLocalVal) { "KubernetesPoolOnPremLinux$instance" } else { "KubernetesPoolLinux$instance" }
+                $poolNameWindows = if($useAzureLocalVal) { "KubernetesPoolOnPremWindows$instance" } else { "KubernetesPoolWindows$instance" }
+                Write-Host "##vso[task.setvariable variable=poolNameLinux;isOutput=true]$poolNameLinux"
+                Write-Host "Exported poolNameLinux=$poolNameLinux"
+                Write-Host "##vso[task.setvariable variable=poolNameWindows;isOutput=true]$poolNameWindows"
+                Write-Host "Exported poolNameWindows=$poolNameWindows"
+
+  - stage: Validate
+    displayName: Validate self-hosted agent pools
+    dependsOn: LoadConfig
+    jobs:
       - job: ValidateLinux
-        displayName: Validate Linux self-hosted pool
-        dependsOn: LoadConfig
-        condition: eq(dependencies.LoadConfig.outputs['ParseConfig.deployLinux'], 'True')
+        displayName: "Validate Linux self-hosted pool ($[ dependencies.LoadConfig.outputs['LoadConfig.ParseConfig.poolNameLinux'] ])"
         pool:
           ${{ if parameters.useOnPremAgents }}:
             name: UbuntuLatestPoolOnPrem
@@ -74,18 +97,49 @@ stages:
             vmImage: ubuntu-latest
         variables:
           - name: instanceNumber
-            value: $[ dependencies.LoadConfig.outputs['ParseConfig.instanceNumber'] ]
+            value: $[ dependencies.LoadConfig.outputs['LoadConfig.ParseConfig.instanceNumber'] ]
           - name: azureDevOpsOrgUrl
-            value: $[ dependencies.LoadConfig.outputs['ParseConfig.azureDevOpsOrgUrl'] ]
+            value: $[ dependencies.LoadConfig.outputs['LoadConfig.ParseConfig.azureDevOpsOrgUrl'] ]
+          - name: useAzureLocal
+            value: $[ dependencies.LoadConfig.outputs['LoadConfig.ParseConfig.useAzureLocal'] ]
+          - name: poolName
+            value: $[ dependencies.LoadConfig.outputs['LoadConfig.ParseConfig.poolNameLinux'] ]
           - name: linuxHelloWaitSeconds
             value: ${{ parameters.linuxHelloWaitSeconds }}
         steps:
           - download: deployAgentsHelm
             artifact: agent-config
           - task: PowerShell@2
-            displayName: Poll Linux pool
+            name: CheckShouldRun
+            displayName: Check if Linux validation should run
+            inputs:
+              targetType: inline
+              pwsh: true
+              script: |
+                Set-StrictMode -Version Latest
+                $cfgPath = Join-Path $env:PIPELINE_WORKSPACE 'deployAgentsHelm/agent-config/config.json'
+                if(-not (Test-Path $cfgPath)){ Write-Host "Config not found at $cfgPath - assuming skip"; Write-Host "##vso[task.setvariable variable=shouldRun]false"; exit 0 }
+                $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
+                $deploy = $false
+                try { $deploy = [bool]$cfg.deployLinux } catch { $deploy = $false }
+                # export helpful job variables for subsequent steps
+                $instance = $cfg.instanceNumber
+                Write-Host "##vso[task.setvariable variable=instanceNumber]$instance"
+                $org = $cfg.azureDevOpsOrgUrl
+                Write-Host "##vso[task.setvariable variable=azureDevOpsOrgUrl]$org"
+                $useLocalVal = $false
+                try { $useLocalVal = [bool]$cfg.useAzureLocal } catch { $useLocalVal = $false }
+                $useLocalStr = if($useLocalVal) { 'True' } else { 'False' }
+                Write-Host "##vso[task.setvariable variable=useAzureLocal]$useLocalStr"
+                $poolName = if($useLocalVal) { "KubernetesPoolOnPremLinux$instance" } else { "KubernetesPoolLinux$instance" }
+                Write-Host "##vso[task.setvariable variable=poolName]$poolName"
+                if($deploy){ Write-Host "##vso[task.setvariable variable=shouldRun]true"; Write-Host "Will run Linux validation" } else { Write-Host "##vso[task.setvariable variable=shouldRun]false"; Write-Host "Skipping Linux validation per config" }
+          - task: PowerShell@2
+            displayName: "Poll Linux pool ($(poolName))"
+            condition: and(succeeded(), eq(variables['shouldRun'], 'true'))
             env:
               AZDO_PAT: $(AZDO_PAT)
+              POOL_NAME: $(poolName)
             inputs:
               targetType: inline
               pwsh: true
@@ -94,13 +148,14 @@ stages:
                 $ErrorActionPreference = 'Stop'
                 $pat = $env:AZDO_PAT
                 if(-not $pat){ throw 'AZDO_PAT missing' }
-                $instance = '$(instanceNumber)'
+                $poolName = $env:POOL_NAME
+                if(-not $poolName){ throw 'POOL_NAME not set' }
                 $orgUrl = '$(azureDevOpsOrgUrl)'
-                $poolName = "KubernetesPoolLinux$instance"
                 $authHeader = 'Basic ' + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(':' + $pat))
                 $headers = @{ Authorization = $authHeader }
                 $apiVersion = '7.1-preview.1'
-                $maxSeconds = 600
+                # Use pipeline-configurable timeout (seconds). Default set by parameter `linuxHelloWaitSeconds`.
+                $maxSeconds = [int] '$(linuxHelloWaitSeconds)'
                 $interval = 10
                 $elapsed = 0
                 Write-Host "Waiting for Linux agent in pool $poolName"
@@ -117,9 +172,11 @@ stages:
                 }
           - task: PowerShell@2
             name: TriggerSample
-            displayName: Trigger sample pipeline on self-hosted Linux pool
+            displayName: "Trigger sample pipeline on self-hosted Linux pool ($(poolName))"
+            condition: and(succeeded(), eq(variables['shouldRun'], 'true'))
             env:
               AZDO_PAT: $(AZDO_PAT)
+              POOL_NAME: $(poolName)
             inputs:
               targetType: inline
               pwsh: true
@@ -146,7 +203,11 @@ stages:
                 $env:AZURE_DEVOPS_EXT_PAT = $pat
                 & az devops configure --defaults organization=$orgUrl project=$project | Out-Null
 
-                $runJson = & az pipelines run --name $pipelineName --parameters instanceNumber=$instance os=linux helloWaitSeconds=$(linuxHelloWaitSeconds) --output json 2>&1
+                # Prefer the job variable (set from ParseConfig)
+                $useLocal = $false
+                if ('$(useAzureLocal)' -ne '') { $useLocal = '$(useAzureLocal)' -in @('True','true','1') }
+                $useLocalParam = if($useLocal) { 'true' } else { 'false' }
+                $runJson = & az pipelines run --name $pipelineName --parameters instanceNumber=$instance os=linux helloWaitSeconds=$(linuxHelloWaitSeconds) useAzureLocal=$useLocalParam --output json 2>&1
                 if($LASTEXITCODE -ne 0){ Write-Error $runJson; throw 'Failed to queue sample pipeline run via az pipelines run' }
                 $runObj = $runJson | Out-String | ConvertFrom-Json
                 $runId = $runObj.id
@@ -188,10 +249,29 @@ stages:
                   if($finalObj){ $finalObj | ConvertTo-Json -Depth 5 | Write-Host } else { Write-Host '<could not parse final JSON>' }
                   throw "Sample pipeline run did not succeed (result=$finalResult)"
                 }
+          - task: PowerShell@2
+            name: SetJobResult
+            displayName: Set Linux job result output
+            condition: always()
+            inputs:
+              targetType: inline
+              pwsh: true
+              script: |
+                Set-StrictMode -Version Latest
+                $jobStatus = '$(Agent.JobStatus)'
+                $sr = '$(sampleRunId)'
+                $should = '$(shouldRun)'
+                if($jobStatus -ne '' -and $jobStatus -ne 'Succeeded'){
+                  Write-Host "##vso[task.setvariable variable=jobResult;isOutput=true]failed"
+                  Write-Host "Job status: $jobStatus -> failed"
+                } elseif($should -in @('true','True','1')){
+                  if($sr -ne ''){ Write-Host "##vso[task.setvariable variable=jobResult;isOutput=true]succeeded"; Write-Host "Job result: succeeded" } else { Write-Host "##vso[task.setvariable variable=jobResult;isOutput=true]failed"; Write-Host "Job result: failed (no run id)" }
+                } else {
+                  Write-Host "##vso[task.setvariable variable=jobResult;isOutput=true]skipped"
+                  Write-Host "Job result: skipped"
+                }
       - job: ValidateWindows
-        displayName: Validate Windows self-hosted pool
-        dependsOn: LoadConfig
-        condition: eq(dependencies.LoadConfig.outputs['ParseConfig.deployWindows'], 'True')
+        displayName: "Validate Windows self-hosted pool ($[ dependencies.LoadConfig.outputs['LoadConfig.ParseConfig.poolNameWindows'] ])"
         pool:
           ${{ if parameters.useOnPremAgents }}:
             name: UbuntuLatestPoolOnPrem
@@ -199,18 +279,49 @@ stages:
             vmImage: ubuntu-latest
         variables:
           - name: instanceNumber
-            value: $[ dependencies.LoadConfig.outputs['ParseConfig.instanceNumber'] ]
+            value: $[ dependencies.LoadConfig.outputs['LoadConfig.ParseConfig.instanceNumber'] ]
           - name: azureDevOpsOrgUrl
-            value: $[ dependencies.LoadConfig.outputs['ParseConfig.azureDevOpsOrgUrl'] ]
+            value: $[ dependencies.LoadConfig.outputs['LoadConfig.ParseConfig.azureDevOpsOrgUrl'] ]
+          - name: useAzureLocal
+            value: $[ dependencies.LoadConfig.outputs['LoadConfig.ParseConfig.useAzureLocal'] ]
+          - name: poolName
+            value: $[ dependencies.LoadConfig.outputs['LoadConfig.ParseConfig.poolNameWindows'] ]
           - name: windowsHelloWaitSeconds
             value: ${{ parameters.windowsHelloWaitSeconds }}
         steps:
           - download: deployAgentsHelm
             artifact: agent-config
           - task: PowerShell@2
-            displayName: Poll Windows pool
+            name: CheckShouldRun
+            displayName: Check if Windows validation should run
+            inputs:
+              targetType: inline
+              pwsh: true
+              script: |
+                Set-StrictMode -Version Latest
+                $cfgPath = Join-Path $env:PIPELINE_WORKSPACE 'deployAgentsHelm/agent-config/config.json'
+                if(-not (Test-Path $cfgPath)){ Write-Host "Config not found at $cfgPath - assuming skip"; Write-Host "##vso[task.setvariable variable=shouldRun]false"; exit 0 }
+                $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
+                $deploy = $false
+                try { $deploy = [bool]$cfg.deployWindows } catch { $deploy = $false }
+                # export helpful job variables for subsequent steps
+                $instance = $cfg.instanceNumber
+                Write-Host "##vso[task.setvariable variable=instanceNumber]$instance"
+                $org = $cfg.azureDevOpsOrgUrl
+                Write-Host "##vso[task.setvariable variable=azureDevOpsOrgUrl]$org"
+                $useLocalVal = $false
+                try { $useLocalVal = [bool]$cfg.useAzureLocal } catch { $useLocalVal = $false }
+                $useLocalStr = if($useLocalVal) { 'True' } else { 'False' }
+                Write-Host "##vso[task.setvariable variable=useAzureLocal]$useLocalStr"
+                $poolName = if($useLocalVal) { "KubernetesPoolOnPremWindows$instance" } else { "KubernetesPoolWindows$instance" }
+                Write-Host "##vso[task.setvariable variable=poolName]$poolName"
+                if($deploy){ Write-Host "##vso[task.setvariable variable=shouldRun]true"; Write-Host "Will run Windows validation" } else { Write-Host "##vso[task.setvariable variable=shouldRun]false"; Write-Host "Skipping Windows validation per config" }
+          - task: PowerShell@2
+            displayName: "Poll Windows pool ($(poolName))"
+            condition: and(succeeded(), eq(variables['shouldRun'], 'true'))
             env:
               AZDO_PAT: $(AZDO_PAT)
+              POOL_NAME: $(poolName)
             inputs:
               targetType: inline
               pwsh: true
@@ -219,13 +330,14 @@ stages:
                 $ErrorActionPreference = 'Stop'
                 $pat = $env:AZDO_PAT
                 if(-not $pat){ throw 'AZDO_PAT missing' }
-                $instance = '$(instanceNumber)'
+                $poolName = $env:POOL_NAME
+                if(-not $poolName){ throw 'POOL_NAME not set' }
                 $orgUrl = '$(azureDevOpsOrgUrl)'
-                $poolName = "KubernetesPoolWindows$instance"
                 $authHeader = 'Basic ' + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(':' + $pat))
                 $headers = @{ Authorization = $authHeader }
                 $apiVersion = '7.1-preview.1'
-                $maxSeconds = 900
+                # Use pipeline-configurable timeout (seconds). Default set by parameter `windowsHelloWaitSeconds`.
+                $maxSeconds = [int] '$(windowsHelloWaitSeconds)'
                 $interval = 15
                 $elapsed = 0
                 Write-Host "Waiting for Windows agent in pool $poolName"
@@ -242,9 +354,11 @@ stages:
                 }
           - task: PowerShell@2
             name: TriggerSample
-            displayName: Trigger sample pipeline on self-hosted Windows pool
+            displayName: "Trigger sample pipeline on self-hosted Windows pool ($(poolName))"
+            condition: and(succeeded(), eq(variables['shouldRun'], 'true'))
             env:
               AZDO_PAT: $(AZDO_PAT)
+              POOL_NAME: $(poolName)
             inputs:
               targetType: inline
               pwsh: true
@@ -271,7 +385,11 @@ stages:
                 $env:AZURE_DEVOPS_EXT_PAT = $pat
                 & az devops configure --defaults organization=$orgUrl project=$project | Out-Null
 
-                $runJson = & az pipelines run --name $pipelineName --parameters instanceNumber=$instance os=windows helloWaitSeconds=$(windowsHelloWaitSeconds) --output json 2>&1
+                # Prefer the job variable (set from ParseConfig)
+                $useLocal = $false
+                if ('$(useAzureLocal)' -ne '') { $useLocal = '$(useAzureLocal)' -in @('True','true','1') }
+                $useLocalParam = if($useLocal) { 'true' } else { 'false' }
+                $runJson = & az pipelines run --name $pipelineName --parameters instanceNumber=$instance os=windows helloWaitSeconds=$(windowsHelloWaitSeconds) useAzureLocal=$useLocalParam --output json 2>&1
                 if($LASTEXITCODE -ne 0){ Write-Error $runJson; throw 'Failed to queue sample pipeline run via az pipelines run' }
                 $runObj = $runJson | Out-String | ConvertFrom-Json
                 $runId = $runObj.id
@@ -313,12 +431,34 @@ stages:
                   if($finalObj){ $finalObj | ConvertTo-Json -Depth 5 | Write-Host } else { Write-Host '<could not parse final JSON>' }
                   throw "Sample pipeline run did not succeed (result=$finalResult)"
                 }
+          - task: PowerShell@2
+            name: SetJobResult
+            displayName: Set Windows job result output
+            condition: always()
+            inputs:
+              targetType: inline
+              pwsh: true
+              script: |
+                Set-StrictMode -Version Latest
+                $jobStatus = '$(Agent.JobStatus)'
+                $sr = '$(sampleRunId)'
+                $should = '$(shouldRun)'
+                if($jobStatus -ne '' -and $jobStatus -ne 'Succeeded'){
+                  Write-Host "##vso[task.setvariable variable=jobResult;isOutput=true]failed"
+                  Write-Host "Job status: $jobStatus -> failed"
+                } elseif($should -in @('true','True','1')){
+                  if($sr -ne ''){ Write-Host "##vso[task.setvariable variable=jobResult;isOutput=true]succeeded"; Write-Host "Job result: succeeded" } else { Write-Host "##vso[task.setvariable variable=jobResult;isOutput=true]failed"; Write-Host "Job result: failed (no run id)" }
+                } else {
+                  Write-Host "##vso[task.setvariable variable=jobResult;isOutput=true]skipped"
+                  Write-Host "Job result: skipped"
+                }
+  - stage: Summary
+    displayName: Validation Summary
+    dependsOn: Validate
+    condition: succeededOrFailed()
+    jobs:
       - job: Summary
         displayName: Validation Summary
-        dependsOn:
-          - ValidateLinux
-          - ValidateWindows
-        condition: succeededOrFailed()
         pool:
           ${{ if parameters.useOnPremAgents }}:
             name: UbuntuLatestPoolOnPrem
@@ -326,17 +466,17 @@ stages:
             vmImage: ubuntu-latest
         variables:
           - name: linuxResult
-            value: $[ dependencies.ValidateLinux.result ]
+            value: $[ dependencies.Validate.outputs['ValidateLinux.SetJobResult.jobResult'] ]
           - name: windowsResult
-            value: $[ dependencies.ValidateWindows.result ]
+            value: $[ dependencies.Validate.outputs['ValidateWindows.SetJobResult.jobResult'] ]
           - name: linuxRunId
-            value: $[ dependencies.ValidateLinux.outputs['TriggerSample.sampleRunId'] ]
+            value: $[ dependencies.Validate.outputs['ValidateLinux.TriggerSample.sampleRunId'] ]
           - name: linuxRunUrl
-            value: $[ dependencies.ValidateLinux.outputs['TriggerSample.sampleRunUrl'] ]
+            value: $[ dependencies.Validate.outputs['ValidateLinux.TriggerSample.sampleRunUrl'] ]
           - name: windowsRunId
-            value: $[ dependencies.ValidateWindows.outputs['TriggerSample.sampleRunId'] ]
+            value: $[ dependencies.Validate.outputs['ValidateWindows.TriggerSample.sampleRunId'] ]
           - name: windowsRunUrl
-            value: $[ dependencies.ValidateWindows.outputs['TriggerSample.sampleRunUrl'] ]
+            value: $[ dependencies.Validate.outputs['ValidateWindows.TriggerSample.sampleRunUrl'] ]
         steps:
           - download: deployAgentsHelm
             artifact: agent-config

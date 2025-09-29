@@ -91,7 +91,9 @@ secret:
   data:
     AZP_URL: "${base64 of https://dev.azure.com/yourorg}"
     AZP_TOKEN: "${base64 of PAT}"
-    AZP_POOL_LINUX: "${base64 of KubernetesPoolLinux003}"
+  AZP_POOL_LINUX: "${base64 of KubernetesPoolLinux003}"
+  # If you deploy with on-prem/workload cluster mode (useAzureLocal=true), use the OnPrem pool names:
+  # AZP_POOL_LINUX: "${base64 of KubernetesPoolOnPremLinux003}"
 ```
 
 2. Install:

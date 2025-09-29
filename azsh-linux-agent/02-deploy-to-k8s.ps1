@@ -4,11 +4,44 @@ $yamlDeploymentFile = "linux-sh-agent-deployment.yaml"
 $yamlDeploymentFileTemplate = "linux-sh-agent-deployment.template.yaml"
 $kubeContext = "workload-cluster-009-admin@workload-cluster-009"
 $namespace = "az-devops-linux"
-$poolName = "KubernetesPoolLinux"
+$poolName = if ($PSBoundParameters.ContainsKey('UseAzureLocal') -and $UseAzureLocal) { "KubernetesPoolOnPremLinux" } else { "KubernetesPoolLinux" }
 $azureDevOpsUrl = "https://dev.azure.com/cad4devops"
-$dockerRegistryServer = "cragentssgvhe4aipy37o.azurecr.io"
-$dockerUser = "cragentssgvhe4aipy37o"
-$imageName = "cragentssgvhe4aipy37o.azurecr.io/linux-sh-agent-docker:latest"
+
+# Parameters: allow overriding registry, user and image via parameters or env vars
+param(
+    [string]$DockerRegistryServer = $env:ACR_NAME,
+    [string]$DockerUser = $env:ACR_USER,
+    [string]$ImageName = $env:LINUX_IMAGE_NAME,
+    # Default ACR short name (no .azurecr.io). Can be overridden by passing this parameter
+    # or by setting the DEFAULT_ACR environment variable in CI.
+    [string]$DefaultAcr = 'cragents003c66i4n7btfksg'
+)
+
+# Resolve Docker registry server: prefer explicit param/env, then DEFAULT_ACR, then built-in fallback
+if (-not $DockerRegistryServer) {
+    if ($env:DEFAULT_ACR) {
+        $DockerRegistryServer = $env:DEFAULT_ACR
+    } elseif ($DefaultAcr) {
+        $DockerRegistryServer = $DefaultAcr
+    } else {
+        $DockerRegistryServer = 'cragents003c66i4n7btfksg'
+    }
+}
+
+# If unqualified short name provided, append azurecr.io
+if ($DockerRegistryServer -and ($DockerRegistryServer -notmatch '\.')) {
+    Write-Host "DockerRegistryServer '$DockerRegistryServer' appears unqualified; appending '.azurecr.io' to form FQDN"
+    $DockerRegistryServer = "$DockerRegistryServer.azurecr.io"
+}
+
+# Derive ACR short name for az CLI (az acr expects the short name)
+$dockerAcrShort = if ($DockerRegistryServer -match '\.') { $DockerRegistryServer.Split('.')[0] } else { $DockerRegistryServer }
+
+# Docker user defaults to the ACR short name when not provided
+if (-not $DockerUser) { $DockerUser = $dockerAcrShort }
+
+# Compose image name if not provided
+if (-not $ImageName) { $ImageName = "$DockerRegistryServer/linux-sh-agent-docker:latest" }
 
 # Replace the placeholder with the actual value
 $template = Get-Content $yamlSecretFileTemplate
@@ -44,7 +77,8 @@ kubectl create namespace $namespace --dry-run=client -o yaml | kubectl apply -f 
 kubectl get namespace $namespace
 
 # Create a secret for the docker registry
-$dockerPassword = az acr credential show --name $dockerRegistryServer --query "passwords[0].value" -o tsv
+# Use the ACR short name when calling az acr credential show (az expects the registry short name)
+$dockerPassword = az acr credential show --name $dockerAcrShort --query "passwords[0].value" -o tsv
 
 kubectl create secret docker-registry regsecret `
     --docker-server=$dockerRegistryServer `

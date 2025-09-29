@@ -9,7 +9,7 @@ Usage (example):
   pwsh ./.azuredevops/scripts/deploy-selfhosted-agents-helm.ps1 \
     -Kubeconfig C:\path\to\kubeconfig \
     -InstanceNumber 003 \
-    -AcrName cragentssgvhe4aipy37o \
+    -AcrName cragents003c66i4n7btfksg \
     -AcrUsername '<username>' -AcrPassword '<password>' \
     -EnsureAzDoPools
 
@@ -25,15 +25,22 @@ This script is intentionally conservative: it will not enable ACR admin or creat
 
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $false)] [string] $Kubeconfig,
+    [Parameter(Mandatory = $false)] [string] $Kubeconfig = "my-workload-cluster-dev-014-kubeconfig.yaml",
+    [Parameter(Mandatory = $false)] [string] $KubeconfigFolder,
     [Parameter(Mandatory = $false)] [switch] $DeployLinux = $true,
     [Parameter(Mandatory = $false)] [switch] $DeployWindows = $true,
     [Parameter(Mandatory = $false)] [string] $WindowsVersion = '2022',
     [Parameter(Mandatory = $false)] [ValidateSet('docker', 'dind', 'ubuntu22')] [string] $LinuxImageVariant = 'docker',
-    [Parameter(Mandatory = $false)] [string] $AcrName = 'cragentssgvhe4aipy37o',
+    [Parameter(Mandatory = $false)] [string] $AcrName = 'cragents003c66i4n7btfksg',
     [Parameter(Mandatory = $false)] [string] $AzureDevOpsOrgUrl = 'https://dev.azure.com/cad4devops',
     [Parameter(Mandatory = $false)] [string] $InstanceNumber = '003',
+    [Parameter(Mandatory = $false)] [string] $HelmTimeout = '2m',
     [Parameter(Mandatory = $false)] [string] $BootstrapPoolName = 'KubernetesPoolWindows',
+    [Parameter(Mandatory = $false)] [switch] $UseAzureLocal,
+    [Parameter(Mandatory = $false)] [string] $KubeContext = "aks-ado-agents-$InstanceNumber",
+    [Parameter(Mandatory = $false)] [string] $KubeContextAzureLocal = "my-workload-cluster-dev-014-admin@my-workload-cluster-dev-014",
+    [Parameter(Mandatory = $false)] [string] $AksResourceGroup = "rg-aks-ado-agents-$InstanceNumber",
+    [Parameter(Mandatory = $false)] [string] $AksClusterName = "aks-ado-agents-$InstanceNumber",
     [Parameter(Mandatory = $false)] [string] $AcrUsername,
     [Parameter(Mandatory = $false)] [string] $AcrPassword,
     # NOTE: we accept only AzureDevOpsOrgUrl now (legacy alias removed)
@@ -51,35 +58,135 @@ function Fail([string]$msg) { Write-Error $msg; exit 1 }
 
 Write-Host "Starting local deploy script (instance=$InstanceNumber)"
 
-# kubeconfig handling
-if ($Kubeconfig) {
-    if (-not (Test-Path $Kubeconfig)) {
-        Fail "Kubeconfig path '$Kubeconfig' not found"
+if (-not $WriteValuesOnly.IsPresent) {
+    # Resolve effective kubeconfig folder (default to C:\Users\<user>\.kube)
+    $userProfile = $env:USERPROFILE; if (-not $userProfile) { $userProfile = $env:HOME }
+    if ($KubeconfigFolder) { $effectiveKubeFolder = $KubeconfigFolder } elseif ($userProfile) { $effectiveKubeFolder = Join-Path $userProfile '.kube' } else { $effectiveKubeFolder = Join-Path ([System.IO.Path]::GetTempPath()) '.kube' }
+
+    # If the caller provided a -Kubeconfig parameter and it exists, prefer it.
+    # This covers the common pipeline wrapper case where an earlier AzureCLI task wrote a
+    # kubeconfig file and the wrapper passes its path to this script as -Kubeconfig.
+    if ($Kubeconfig) {
+        try { $resolved = (Resolve-Path -Path $Kubeconfig -ErrorAction SilentlyContinue).Path } catch { $resolved = $null }
+        if ($resolved) {
+            $env:KUBECONFIG = $resolved
+            Write-Host "Using provided -Kubeconfig: $env:KUBECONFIG"
+        }
+        else {
+            Write-Host "-Kubeconfig was provided ('$Kubeconfig') but the path was not found; falling back to other resolution."
+        }
     }
-    $env:KUBECONFIG = (Resolve-Path $Kubeconfig).Path
-    Write-Host "Using kubeconfig: $env:KUBECONFIG"
-}
-elseif ($env:KUBECONFIG) {
-    Write-Host "Using existing KUBECONFIG: $env:KUBECONFIG"
-}
-else {
-    # Try the default kubeconfig location for the current user (Windows-friendly)
-    $userProfile = $env:USERPROFILE
-    if (-not $userProfile) { $userProfile = $env:HOME }
-    $defaultKube = Join-Path $userProfile '.kube\config'
-    if (Test-Path $defaultKube) {
-        $env:KUBECONFIG = (Resolve-Path $defaultKube).Path
-        Write-Host "KUBECONFIG not provided; using default path: $env:KUBECONFIG"
+
+    # If a previous pipeline step (AzureCLI task or secure-file downloader) already set KUBECONFIG
+    # prefer that and skip attempting to call az again (the AzureCLI task does not leave a
+    # persistent az login for subsequent tasks). This makes the script resilient when the
+    # pipeline obtains credentials via an earlier task and writes KUBECONFIG using the
+    # Write-Host "##vso[task.setvariable variable=KUBECONFIG]..." mechanism.
+    if ($env:KUBECONFIG -and (Test-Path $env:KUBECONFIG)) {
+        Write-Host "KUBECONFIG already set to $env:KUBECONFIG (from previous step); skipping az fetch."
+    }
+    elseif (-not $UseAzureLocal.IsPresent) {
+        # Non-local: always fetch credentials from AKS via az CLI and fail fast on errors
+        Write-Host 'UseAzureLocal not set; fetching AKS credentials via az CLI.'
+        if (-not (Get-Command az -ErrorAction SilentlyContinue)) { Fail "Azure CLI (az) not found in PATH. Install Azure CLI or run with -UseAzureLocal and provide a local kubeconfig." }
+        if (-not $AksResourceGroup -or -not $AksClusterName) { Fail "To fetch AKS credentials the script requires -AksResourceGroup and -AksClusterName when -UseAzureLocal is not set." }
+        try { $acct = az account show --query id -o tsv 2>$null } catch { Fail "Failed to query Azure account (az account show). Ensure az is logged in. Error: $($_.Exception.Message)" }
+        if (-not $acct) { Fail 'No Azure subscription found in az CLI context. Login (az login) or set subscription before running this script.' }
+
+        $tempBase = if ($env:AGENT_TEMPDIRECTORY) { $env:AGENT_TEMPDIRECTORY } else { [System.IO.Path]::GetTempPath() }
+        $kubeTmp = Join-Path $tempBase 'kubeconfig'
+        Write-Host "Fetching AKS credentials for cluster '$AksClusterName' in resource group '$AksResourceGroup' into $kubeTmp"
+        try { & az aks get-credentials --resource-group $AksResourceGroup --name $AksClusterName --file $kubeTmp --overwrite-existing } catch { Fail "az aks get-credentials failed: $($_.Exception.Message)" }
+        if (-not (Test-Path $kubeTmp)) { Fail "az aks get-credentials did not produce a kubeconfig at expected path: $kubeTmp" }
+        $env:KUBECONFIG = (Resolve-Path $kubeTmp).Path
+        Write-Host "Set KUBECONFIG to $env:KUBECONFIG"
     }
     else {
-        Fail "KUBECONFIG not set and -Kubeconfig not provided. Expected default at $defaultKube not found. Export KUBECONFIG or pass -Kubeconfig <path>."
+        # Local mode: resolve local kubeconfig by joining folder and filename
+        if ($Kubeconfig) {
+            try { $isAbs = [System.IO.Path]::IsPathRooted($Kubeconfig) } catch { $isAbs = $false }
+            if ($isAbs) { $resolvedLocalKube = $Kubeconfig } else { $resolvedLocalKube = Join-Path $effectiveKubeFolder $Kubeconfig }
+        }
+        else { $resolvedLocalKube = Join-Path $effectiveKubeFolder 'config\my-workload-cluster-dev-014-kubeconfig.yaml' }
+
+        if (Test-Path $resolvedLocalKube) {
+            $env:KUBECONFIG = (Resolve-Path $resolvedLocalKube).Path
+            Write-Host "KUBECONFIG not provided; using local kubeconfig: $env:KUBECONFIG"
+        }
+        else {
+            $legacy = Join-Path $effectiveKubeFolder 'config'
+            if (Test-Path $legacy) { $env:KUBECONFIG = (Resolve-Path $legacy).Path; Write-Host "Using legacy kubeconfig at $env:KUBECONFIG" }
+            else { Fail "Local kubeconfig not found at either $resolvedLocalKube or $legacy. Provide -Kubeconfig or ensure the default exists." }
+        }
+    }
+
+    # verify tools
+    foreach ($tool in @('kubectl', 'helm')) {
+        if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) {
+            Fail "$tool is not installed or not on PATH. Please install it and retry."
+        }
+    }
+
+    # If KUBECONFIG was set by this script (az or secure-file), explicitly select a context
+    # from that kubeconfig so kubectl commands target the intended cluster. Choose the first
+    # context found in the kubeconfig file as a reasonable default.
+    try {
+        if ($env:KUBECONFIG) {
+            $ctxRaw = (& kubectl --kubeconfig $env:KUBECONFIG config view -o jsonpath="{.contexts[*].name}" 2>$null) -join ' '
+            $ctxs = @()
+            if ($ctxRaw) { $ctxs = ($ctxRaw -split '\s+') | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' } }
+            if ($ctxs.Count -gt 0) {
+                $firstCtx = $ctxs[0]
+                try { & kubectl --kubeconfig $env:KUBECONFIG config use-context $firstCtx > $null 2>&1; Write-Host "Set kubectl current-context to $firstCtx (from $env:KUBECONFIG)" }
+                catch { Write-Warning "Failed to set kubectl current-context to ${firstCtx}: $($_.Exception.Message)" }
+            }
+            else {
+                Write-Warning "No contexts found in kubeconfig at $env:KUBECONFIG; leaving default kubectl context as-is."
+            }
+        }
+        else {
+            Write-Host "KUBECONFIG not set; kubectl will use the default context on the agent."
+        }
+    }
+    catch {
+        Write-Warning "Failed while attempting to select kubectl context from KUBECONFIG: $($_.Exception.Message)"
+    }
+
+    # Confirm we can talk to the cluster early
+    try {
+        Write-Host 'Verifying cluster access with: kubectl get nodes -o wide'
+        kubectl get nodes -o wide | Out-Null
+        Write-Host 'Cluster access verified.'
+    }
+    catch {
+        Fail "Failed to list nodes from cluster (kubectl get nodes -o wide). Ensure KUBECONFIG is correct and cluster is reachable. Error: $($_.Exception.Message)"
+    }
+
+    # Enforce expected kubectl context if caller provided one.
+    try {
+        if ($UseAzureLocal.IsPresent -and $KubeContextAzureLocal) { $expectedCtx = $KubeContextAzureLocal }
+        elseif ($KubeContext) { $expectedCtx = $KubeContext }
+        else { $expectedCtx = $null }
+
+        if ($expectedCtx) {
+            $current = (& kubectl config current-context 2>$null) -as [string]
+            if (-not $current) { Fail "No current kubectl context detected but expected '$expectedCtx'. Ensure KUBECONFIG/context is configured." }
+            if ($current.Trim() -ne $expectedCtx.Trim()) { Fail "Current kubectl context '$current' does not match expected context '$expectedCtx'. Aborting." }
+            Write-Host "Current kubectl context '$current' matches expected context '$expectedCtx'."
+        }
+    }
+    catch {
+        Fail "Error while validating current kubectl context: $($_.Exception.Message)"
     }
 }
+else { Write-Host 'WriteValuesOnly set: skipping kubeconfig handling and tool checks' }
 
-# verify tools
-foreach ($tool in @('kubectl', 'helm')) {
-    if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) {
-        Fail "$tool is not installed or not on PATH. Please install it and retry."
+# verify tools (skip when only writing values)
+if (-not $WriteValuesOnly.IsPresent) {
+    foreach ($tool in @('kubectl', 'helm')) {
+        if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) {
+            Fail "$tool is not installed or not on PATH. Please install it and retry."
+        }
     }
 }
 # Populate ACR credentials from environment variables if not provided as parameters.
@@ -109,14 +216,15 @@ if ( ($effectiveAzDoToken -or $AzDevOpsPool -or $AzDevOpsPoolLinux -or $AzDevOps
 $poolLinux = if ($AzDevOpsPoolLinux) { $AzDevOpsPoolLinux } elseif ($AzDevOpsPool) { $AzDevOpsPool } else { $null }
 $poolWindows = if ($AzDevOpsPoolWindows) { $AzDevOpsPoolWindows } elseif ($AzDevOpsPool) { $AzDevOpsPool } else { $null }
 
-# If no explicit pool names were provided, default to the canonical derived names
-# so the generated values and subsequent resolver use predictable pool names.
+# If no explicit pool names were provided, default to derived names. When running
+# against a local/on-prem cluster (UseAzureLocal) include the OnPrem marker so pools
+# are clearly differentiated from cloud-hosted pools.
 if ((-not $poolLinux) -and $InstanceNumber) {
-    $poolLinux = "KubernetesPoolLinux$InstanceNumber"
+    if ($UseAzureLocal.IsPresent) { $poolLinux = "KubernetesPoolOnPremLinux$InstanceNumber" } else { $poolLinux = "KubernetesPoolLinux$InstanceNumber" }
     Write-Host "No explicit Linux pool name provided; defaulting to $poolLinux"
 }
 if ((-not $poolWindows) -and $InstanceNumber) {
-    $poolWindows = "KubernetesPoolWindows$InstanceNumber"
+    if ($UseAzureLocal.IsPresent) { $poolWindows = "KubernetesPoolOnPremWindows$InstanceNumber" } else { $poolWindows = "KubernetesPoolWindows$InstanceNumber" }
     Write-Host "No explicit Windows pool name provided; defaulting to $poolWindows"
 }
 
@@ -168,8 +276,8 @@ if ($shouldEnsurePools) {
         # Use the canonical Azure DevOps org URL parameter
         $org = $AzureDevOpsOrgUrl
         if (-not $org) { Write-Warning 'No Azure DevOps org URL available; skipping pool creation' } else {
-            if ($DeployLinux) { Ensure-Pool $org $pat "KubernetesPoolLinux$InstanceNumber" | Out-Null }
-            if ($DeployWindows) { Ensure-Pool $org $pat "KubernetesPoolWindows$InstanceNumber" | Out-Null }
+            if ($DeployLinux) { Ensure-Pool $org $pat $poolLinux | Out-Null }
+            if ($DeployWindows) { Ensure-Pool $org $pat $poolWindows | Out-Null }
         }
     }
 }
@@ -216,14 +324,16 @@ else {
 
 $yamlLines += 'linux:'
 $yamlLines += ('  enabled: ' + $enabledLinux)
-$yamlLines += '  image:'
-$yamlLines += ('    repository: ' + $linuxRepo)
-$yamlLines += "    tag: latest"
+$yamlLines += '  deploy:'
+$yamlLines += '    container:'
+$yamlLines += ('      image: ' + ($linuxRepo + ':latest'))
+$yamlLines += '      pullPolicy: IfNotPresent'
 $yamlLines += 'windows:'
 $yamlLines += ('  enabled: ' + $enabledWindows)
-$yamlLines += '  image:'
-$yamlLines += ('    repository: ' + $winRepo)
-$yamlLines += "    tag: latest"
+$yamlLines += '  deploy:'
+$yamlLines += '    container:'
+$yamlLines += ('      image: ' + ($winRepo + ':latest'))
+$yamlLines += '      pullPolicy: IfNotPresent'
 $yamlLines += 'common:'
 $yamlLines += ('  instance: ' + $InstanceNumber)
 $yamlLines += ('linuxNamespace: az-devops-linux-' + $InstanceNumber)
@@ -338,7 +448,23 @@ else {
     $yamlLines += '  windows: ""'
 }
 
-$yamlPath = Join-Path -Path $env:TEMP -ChildPath "helm-values-override-$InstanceNumber.yaml"
+$tmpDir = $null
+# Resolve a cross-platform temporary directory. Prefer Azure Pipelines provided Agent temp directory when available,
+# otherwise fall back to .NET's GetTempPath(), and finally to $env:TEMP for maximum compatibility.
+if ($env:AGENT_TEMPDIRECTORY) { $tmpDir = $env:AGENT_TEMPDIRECTORY }
+elseif ([System.IO.Path]::GetTempPath()) { $tmpDir = [System.IO.Path]::GetTempPath() }
+elseif ($env:TEMP) { $tmpDir = $env:TEMP }
+else { Fail 'Could not determine a temporary directory (AGENT_TEMPDIRECTORY, GetTempPath() and TEMP are all unavailable).' }
+
+# Normalize to an existing directory (create if necessary)
+try {
+    if (-not (Test-Path -Path $tmpDir)) { New-Item -ItemType Directory -Path $tmpDir | Out-Null }
+}
+catch {
+    Fail ("Failed to create or access temporary directory: $tmpDir. Error: $($_.Exception.Message)")
+}
+
+$yamlPath = Join-Path -Path $tmpDir -ChildPath "helm-values-override-$InstanceNumber.yaml"
 $yamlLines | Out-File -FilePath $yamlPath -Encoding utf8
 Write-Host "Wrote Helm values override to $yamlPath"
 # Helper: mask sensitive values in YAML for safe diagnostics
@@ -456,7 +582,7 @@ if ($AcrUsername -and $AcrPassword) {
     $dockerConfigJson = ConvertTo-Json $dockerConfigObj -Depth 10
     # Compact JSON for the temp file as well
     $dockerConfigJson = ($dockerConfigJson -replace "\r?\n", "") -replace "\s+", " "
-    $tmp = Join-Path $env:TEMP "dockerconfig-$InstanceNumber.json"
+    $tmp = Join-Path $tmpDir "dockerconfig-$InstanceNumber.json"
     [System.IO.File]::WriteAllText($tmp, $dockerConfigJson)
 
     foreach ($ns in $targetNs) {
@@ -500,8 +626,8 @@ try { & kubectl -n $releaseNamespace delete secret regsecret --ignore-not-found 
 helm dependency update $chartPath | Out-Null
 
 # Run helm with --atomic and --debug, saving output to a temp log. --atomic will rollback on failure.
-$helmLog = Join-Path $env:TEMP "helm-install-$releaseName-$InstanceNumber.log"
-$helmArgs = @('upgrade', '--install', $releaseName, $chartPath, '--namespace', $releaseNamespace, '--create-namespace', '-f', $yamlPath, '--wait', '--timeout', '10m', '--atomic', '--debug')
+$helmLog = Join-Path $tmpDir "helm-install-$releaseName-$InstanceNumber.log"
+$helmArgs = @('upgrade', '--install', $releaseName, $chartPath, '--namespace', $releaseNamespace, '--create-namespace', '-f', $yamlPath, '--wait', '--timeout', $HelmTimeout, '--atomic', '--debug')
 Write-Host "Running helm with args: $($helmArgs -join ' ')"
 # Run helm and tee output to both console and a temp log file while capturing output
 # Avoid using Tee-Object's -Variable parameter here (it conflicts when also

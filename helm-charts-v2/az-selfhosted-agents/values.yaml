@@ -40,7 +40,7 @@ linux:
     replicas: 1
     container:
       name: linux-agent
-      image: cragentssgvhe4aipy37o.azurecr.io/linux-sh-agent-docker:latest
+      image: linux-sh-agent-docker:latest
       pullPolicy: IfNotPresent
       resources:
         {}
@@ -63,7 +63,7 @@ windows:
     replicas: 1
     container:
       name: windows-agent
-      image: cragentssgvhe4aipy37o.azurecr.io/windows-sh-agent-2022:latest
+      image: windows-sh-agent-2022:latest
       pullPolicy: IfNotPresent
       resources:
         {}
