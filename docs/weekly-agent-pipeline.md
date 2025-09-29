@@ -27,9 +27,10 @@ Cron: `0 2 * * 1` (Every Monday at 02:00 UTC) — defined under `schedules:` wit
 3. LinuxAgentImage job (conditional):
    - Builds & pushes Linux agent image with the effective tag suffix.
    - Captures image digest for traceability.
-4. WindowsAgentImages job (conditional):
-   - Iterates the configured Windows base versions (2019/2022/2025) building & tagging images.
-   - Captures per‑version image digests.
+4. Windows agent builds (conditional):
+   - The pipeline builds Windows images for each configured Windows base version (2019/2022/2025). To improve concurrency and determinism the pipeline uses per-version jobs (for example `WindowsAgentImage_2019`, `WindowsAgentImage_2022`, `WindowsAgentImage_2025`) so each Windows variant can build in parallel.
+   - Each job passes the explicit `-WindowsVersions $(WIN_VERSION)` argument into the `azsh-windows-agent/01-build-and-push.ps1` helper to ensure the correct Dockerfile and base image are selected.
+   - Captures per‑version image digests (one file per job) to aid traceability.
 5. Summary job:
    - Lists recent repository tags (Linux + Windows) and prints collected digests.
    - Verifies the effective tag exists across the expected repositories.

@@ -11,27 +11,55 @@ parameters:
     default: true
   - name: windowsVersion
     type: string
-    default: '2022'
+    default: "2022"
   - name: linuxImageVariant
     type: string
-    default: 'docker'
-  - name: acrName
+    default: "docker"
+  - name: AZURE_SERVICE_CONNECTION
     type: string
-    default: 'cragentssgvhe4aipy37o'
+    default: "DOS_DevOpsShield_Prod"
+    values:
+      - "DOS_DevOpsShield_Prod"
+      - "ADO_SvcConnRgScopedProd"
+  - name: ACR_NAME
+    type: string
+    default: "cragents003c66i4n7btfksg"
+    values:
+      - "cragents003c66i4n7btfksg"
+      # legacy registry removed from options to avoid accidental selection
+      # - "cragentssgvhe4aipy37o"
+  - name: attachAcr
+    type: boolean
+    default: true
+  - name: skipLinux
+    type: boolean
+    default: false
+  - name: useAzureLocal
+    type: boolean
+    default: false
+  - name: aksResourceGroup
+    type: string
+    default: "rg-aks-ado-agents-003"
+  - name: aksClusterName
+    type: string
+    default: "aks-ado-agents-003"
   - name: azureDevOpsOrgUrl
     type: string
-    default: 'https://dev.azure.com/cad4devops'
+    default: "https://dev.azure.com/cad4devops"
   - name: instanceNumber
     type: string
-    default: '003'
+    default: "003"
   - name: bootstrapPoolName
     type: string
-    default: 'KubernetesPoolWindows'
+    default: "KubernetesPoolWindows"
+  - name: useOnPremAgents
+    type: boolean
+    default: true # Set to true to use on-premises agents, false to use cloud agents
 
 variables:
-  - group: ADO_az-devops-agents-k8s
+  - group: ADO_az-devops-agents-k8s # to get AZDO_PAT
   - name: azureSubscription
-    value: ADO_SvcConnRgScopedProd
+    value: ${{ parameters.AZURE_SERVICE_CONNECTION }}
 
 stages:
   - stage: DeployHelm
@@ -40,24 +68,110 @@ stages:
       - job: HelmDeploy
         displayName: Deploy agents Helm chart
         pool:
-          ${{ if ne(parameters.bootstrapPoolName, '') }}:
-            name: ${{ parameters.bootstrapPoolName }}
-          ${{ if eq(parameters.bootstrapPoolName, '') }}:
+          ${{ if eq(parameters.useAzureLocal, true) }}:
+            ${{ if ne(parameters.bootstrapPoolName, '') }}:
+              name: ${{ parameters.bootstrapPoolName }}
+            ${{ if eq(parameters.bootstrapPoolName, '') }}:
+              vmImage: ubuntu-latest
+          ${{ if eq(parameters.useAzureLocal, false) }}:
             vmImage: ubuntu-latest
         steps:
           - checkout: self
 
-          - task: DownloadSecureFile@1
-            name: DownloadKubeconfig
-            displayName: Download AKS kubeconfig (secure file)
-            inputs:
-              secureFile: AKS_my-workload-cluster-dev-014-kubeconfig_file
+          - ${{ if eq(parameters.useAzureLocal, true) }}:
+              - task: DownloadSecureFile@1
+                name: DownloadKubeconfig
+                displayName: Download AKS kubeconfig (secure file)
+                inputs:
+                  secureFile: AKS_my-workload-cluster-dev-014-kubeconfig_file
+          - ${{ if eq(parameters.useAzureLocal, false) }}:
+              - task: AzureCLI@2
+                displayName: Fetch AKS credentials (az aks get-credentials)
+                inputs:
+                  azureSubscription: $(azureSubscription)
+                  scriptType: bash
+                  scriptLocation: inlineScript
+                  inlineScript: |
+                    set -euo pipefail
+                    if [ -z "${{ parameters.aksResourceGroup }}" ] || [ -z "${{ parameters.aksClusterName }}" ]; then
+                      echo "AKS resource group or cluster name not provided. Provide aksResourceGroup and aksClusterName when useAzureLocal is false."
+                      exit 1
+                    fi
+                    KCFG="$AGENT_TEMPDIRECTORY/kubeconfig"
+                    echo "Fetching AKS credentials for ${{ parameters.aksClusterName }} in ${{ parameters.aksResourceGroup }} into $KCFG"
+                    az aks get-credentials --resource-group "${{ parameters.aksResourceGroup }}" --name "${{ parameters.aksClusterName }}" --file "$KCFG" --overwrite-existing
+                    echo "##vso[task.setvariable variable=KUBECONFIG]$KCFG"
+
+              - ${{ if eq(parameters.attachAcr, true) }}:
+                  - task: AzureCLI@2
+                    displayName: Attach ACR to AKS (optional)
+                    enabled: true
+                    inputs:
+                      azureSubscription: $(azureSubscription)
+                      scriptType: bash
+                      scriptLocation: inlineScript
+                      inlineScript: |
+                        set -euo pipefail
+                        if [ -z "${{ parameters.aksResourceGroup }}" ] || [ -z "${{ parameters.aksClusterName }}" ]; then
+                          echo "AKS resource group or cluster name not provided. Provide aksResourceGroup and aksClusterName when useAzureLocal is false."
+                          exit 1
+                        fi
+                        ACR_NAME="${{ parameters.ACR_NAME }}"
+                        RG="${{ parameters.aksResourceGroup }}"
+                        CLUSTER="${{ parameters.aksClusterName }}"
+                        echo "Checking whether ACR '$ACR_NAME' is already attached to AKS cluster '$CLUSTER' in resource group '$RG'"
+
+                        # Determine the cluster's principalId (managed identity) or fall back to service principal clientId
+                        principalId=$(az aks show -g "$RG" -n "$CLUSTER" --query "identity.principalId" -o tsv 2>/dev/null || true)
+                        if [ -z "$principalId" ] || [ "$principalId" = "null" ]; then
+                          principalId=$(az aks show -g "$RG" -n "$CLUSTER" --query "servicePrincipalProfile.clientId" -o tsv 2>/dev/null || true)
+                        fi
+
+                        need_attach=1
+                        if [ -n "$principalId" ] && [ "$principalId" != "null" ]; then
+                          # Resolve ACR resource id if possible
+                          acrId=$(az acr show -n "$ACR_NAME" --query id -o tsv 2>/dev/null || true)
+                          if [ -z "$acrId" ]; then
+                            # If ACR_NAME looks like a resource id, use it
+                            if echo "$ACR_NAME" | grep -q "/subscriptions/"; then
+                              acrId="$ACR_NAME"
+                            else
+                              echo "Warning: could not resolve ACR resource id for '$ACR_NAME' - will attempt attach (az will validate)."
+                              acrId=""
+                            fi
+                          fi
+
+                          if [ -n "$acrId" ]; then
+                            # Check for any role assignment for this principal on the ACR scope
+                            assignCount=$(az role assignment list --assignee "$principalId" --scope "$acrId" --query "length([])" -o tsv 2>/dev/null || echo 0)
+                            if [ -n "$assignCount" ] && [ "$assignCount" -gt 0 ]; then
+                              echo "Found existing role assignment(s) between AKS principal ($principalId) and ACR ($acrId). Skipping attach."
+                              need_attach=0
+                            else
+                              echo "No role assignment found between AKS principal ($principalId) and ACR ($acrId). Will attach."
+                              need_attach=1
+                            fi
+                          else
+                            # If we couldn't resolve acrId, be conservative and attach
+                            need_attach=1
+                          fi
+                        else
+                          echo "Could not determine AKS cluster principalId/servicePrincipalProfile; proceeding to attach ACR to be safe."
+                          need_attach=1
+                        fi
+
+                        if [ "$need_attach" -eq 1 ]; then
+                          echo "Attaching ACR '$ACR_NAME' to AKS cluster '$CLUSTER' in resource group '$RG'"
+                          az aks update --resource-group "$RG" --name "$CLUSTER" --attach-acr "$ACR_NAME"
+                        else
+                          echo "Skipping az aks update --attach-acr because cluster already has access to ACR."
+                        fi
 
           - task: HelmInstaller@1
             enabled: false
             displayName: Install Helm client
             inputs:
-              helmVersionToInstall: 'latest' # will install 4 alpha!!
+              helmVersionToInstall: "latest" # will install 4 alpha!!
 
           - task: PowerShell@2
             displayName: Prepare kubeconfig & ensure kubectl in PATH
@@ -67,12 +181,18 @@ stages:
               script: |
                 Set-StrictMode -Version Latest
                 $ErrorActionPreference = 'Stop'
+                # If a secure file downloader ran earlier it will populate DownloadKubeconfig.secureFilePath
                 $secureKubeConfig = '$(DownloadKubeconfig.secureFilePath)'
-                if(-not $secureKubeConfig){ throw 'DownloadSecureFile did not produce a path. Ensure the task name is DownloadKubeconfig.' }
-                $kubeconfigPath = Join-Path $env:AGENT_TEMPDIRECTORY 'kubeconfig'
-                Copy-Item -Path $secureKubeConfig -Destination $kubeconfigPath -Force
-                Write-Host "Copied kubeconfig to $kubeconfigPath"
-                Write-Host "##vso[task.setvariable variable=KUBECONFIG]$kubeconfigPath"
+                if(-not [string]::IsNullOrWhiteSpace($secureKubeConfig) -and (Test-Path $secureKubeConfig)){
+                  $kubeconfigPath = Join-Path $env:AGENT_TEMPDIRECTORY 'kubeconfig'
+                  Copy-Item -Path $secureKubeConfig -Destination $kubeconfigPath -Force
+                  Write-Host "Copied secure-file kubeconfig to $kubeconfigPath"
+                  Write-Host "##vso[task.setvariable variable=KUBECONFIG]$kubeconfigPath"
+                } elseif(-not [string]::IsNullOrWhiteSpace($env:KUBECONFIG) -and (Test-Path $env:KUBECONFIG)){
+                  Write-Host "KUBECONFIG already set to $env:KUBECONFIG (from previous az aks get-credentials step)"
+                } else {
+                  throw 'No kubeconfig available: neither DownloadSecureFile produced a kubeconfig nor was KUBECONFIG previously set. Ensure useAzureLocal=true with a secure file, or provide aksResourceGroup/aksClusterName with useAzureLocal=false.'
+                }
                 $kubectlCmd = Get-Command kubectl -ErrorAction SilentlyContinue
                 if(-not $kubectlCmd){
                   Write-Host 'kubectl not found on PATH; downloading...'
@@ -88,21 +208,62 @@ stages:
           # We keep kubeconfig preparation above; now invoke the single deploy helper with the
           # necessary parameters and environment variables.
           - task: PowerShell@2
+            displayName: Assert ACR_NAME matches pipeline parameter
+            inputs:
+              targetType: inline
+              pwsh: true
+              script: |
+                Set-StrictMode -Version Latest
+                $ErrorActionPreference = 'Stop'
+                $paramAcr = '${{ parameters.ACR_NAME }}'
+                $envAcr = $env:ACR_NAME
+                if (-not $paramAcr -or [string]::IsNullOrWhiteSpace($paramAcr)) {
+                  Write-Error "Pipeline parameter ACR_NAME is empty. Ensure the pipeline passes ACR_NAME parameter."; exit 1
+                }
+                if (-not $envAcr -or [string]::IsNullOrWhiteSpace($envAcr)) {
+                  Write-Host "Pipeline environment variable ACR_NAME is empty; setting it from pipeline parameter."
+                  Write-Host "##vso[task.setvariable variable=ACR_NAME]$paramAcr"
+                  Write-Host "ACR_NAME set to $paramAcr"
+                }
+                elseif ($envAcr -ne $paramAcr) {
+                  Write-Error "ACR_NAME mismatch: pipeline parameter value='$paramAcr' but environment ACR_NAME='$envAcr'. Aborting."; exit 1
+                }
+                else {
+                  Write-Host "ACR_NAME assertion passed: $envAcr"
+                }
+
+          - task: PowerShell@2
             displayName: Deploy agents (via repo script wrapper)
             env:
               KUBECONFIG: $(KUBECONFIG)
-              ACR_NAME: ${{ parameters.acrName }}
+              ACR_NAME: ${{ parameters.ACR_NAME }}
+              PIPELINE_ACR_NAME: ${{ parameters.ACR_NAME }}
               AZDO_PAT: $(AZDO_PAT)
               ACR_USERNAME: $(ACR_USERNAME)
               ACR_PASSWORD: $(ACR_PASSWORD)
-              INSTANCE_NUMBER: '${{ parameters.instanceNumber }}'
-              DEPLOY_LINUX: '${{ parameters.deployLinux }}'
-              DEPLOY_WINDOWS: '${{ parameters.deployWindows }}'
-              AZDO_ORG_URL: '${{ parameters.azureDevOpsOrgUrl }}'
+              INSTANCE_NUMBER: "${{ parameters.instanceNumber }}"
+              DEPLOY_LINUX: $(DEPLOY_LINUX)
+              DEPLOY_WINDOWS: "${{ parameters.deployWindows }}"
+              AZDO_ORG_URL: "${{ parameters.azureDevOpsOrgUrl }}"
             inputs:
               targetType: filePath
-              filePath: '$(Build.SourcesDirectory)\\.azuredevops\\scripts\\run-deploy-selfhosted-agents-helm.ps1'
+              # Use POSIX-style forward slashes so the path resolves correctly on linux agents
+              filePath: "$(Build.SourcesDirectory)/.azuredevops/scripts/run-deploy-selfhosted-agents-helm.ps1"
               pwsh: true
+
+          - task: PowerShell@2
+            displayName: Compute DEPLOY_LINUX variable
+            inputs:
+              targetType: inline
+              pwsh: true
+              script: |
+                Set-StrictMode -Version Latest
+                $ErrorActionPreference = 'Stop'
+                $deployLinuxParam = [System.Convert]::ToBoolean('${{ parameters.deployLinux }}')
+                $skipLinuxParam = [System.Convert]::ToBoolean('${{ parameters.skipLinux }}')
+                $deployLinux = ($deployLinuxParam -and -not $skipLinuxParam)
+                Write-Host "Computed deployLinux (deployLinuxParam=$deployLinuxParam, skipLinuxParam=$skipLinuxParam) => $deployLinux"
+                Write-Host "##vso[task.setvariable variable=DEPLOY_LINUX]$deployLinux"
 
           - task: PowerShell@2
             name: SetHelmOutputs
@@ -128,7 +289,7 @@ stages:
           - task: PublishPipelineArtifact@1
             displayName: Publish helm values override
             inputs:
-              targetPath: '$(Build.ArtifactStagingDirectory)/helm-values-override.yaml'
+              targetPath: "$(Build.ArtifactStagingDirectory)/helm-values-override.yaml"
               artifact: helm-values
 
           - task: PowerShell@2
@@ -157,7 +318,10 @@ stages:
         dependsOn: HelmDeploy
         condition: succeededOrFailed()
         pool:
-          vmImage: ubuntu-latest
+          ${{ if parameters.useOnPremAgents }}:
+            name: UbuntuLatestPoolOnPrem
+          ${{ else }}:
+            vmImage: ubuntu-latest
         steps:
           - task: PowerShell@2
             displayName: Generate config artifact (for validation pipeline)
@@ -173,6 +337,7 @@ stages:
                   azureDevOpsOrgUrl = '${{ parameters.azureDevOpsOrgUrl }}'
                   windowsVersion    = '${{ parameters.windowsVersion }}'
                   linuxImageVariant = '${{ parameters.linuxImageVariant }}'
+                  useAzureLocal     = $${{ parameters.useAzureLocal }}
                 } | ConvertTo-Json -Depth 5
                 $path = Join-Path $env:BUILD_ARTIFACTSTAGINGDIRECTORY 'config.json'
                 $config | Out-File $path -Encoding utf8
@@ -201,8 +366,9 @@ stages:
                 try {
                   $instance = '${{ parameters.instanceNumber }}'
                   if([string]::IsNullOrWhiteSpace($instance)){ $instance = '003' }
-                  $linuxPool        = "KubernetesPoolLinux$instance"
-                  $windowsPool      = "KubernetesPoolWindows$instance"
+                  $useLocalParam = $false
+                  try { $useLocalParam = [bool]('${{ parameters.useAzureLocal }}') } catch { $useLocalParam = $false }
+                  if ($useLocalParam) { $linuxPool = "KubernetesPoolOnPremLinux$instance"; $windowsPool = "KubernetesPoolOnPremWindows$instance" } else { $linuxPool = "KubernetesPoolLinux$instance"; $windowsPool = "KubernetesPoolWindows$instance" }
                   $linuxNamespace   = "az-devops-linux-$instance"
                   $windowsNamespace = "az-devops-windows-$instance"
                   $linuxSecret      = "linux-sh-agent-secret-$instance"
@@ -308,6 +474,6 @@ stages:
           - task: PublishPipelineArtifact@1
             displayName: Publish applied helm values (if present)
             inputs:
-              targetPath: '$(System.DefaultWorkingDirectory)/helm-applied-values.yaml'
+              targetPath: "$(System.DefaultWorkingDirectory)/helm-applied-values.yaml"
               artifact: helm-applied-values
             condition: and(succeeded(), eq(variables['HelmAppliedValuesExists'], 'true'))

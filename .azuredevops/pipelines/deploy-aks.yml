@@ -1,0 +1,85 @@
+## Azure DevOps pipeline to deploy AKS + ACR using infra/bicep/deploy.ps1
+## This pipeline uses the AzureCLI@2 task (PowerShell Core) so 'az' is available
+## Fill in the 'azureSubscription' variable with your service connection name.
+
+trigger: none
+pr: none
+
+parameters:
+  - name: AZURE_SERVICE_CONNECTION
+    type: string
+    default: 'DOS_DevOpsShield_Prod'
+    values:
+      - 'DOS_DevOpsShield_Prod'
+  - name: ACR_NAME
+    type: string
+    default: 'cragents003c66i4n7btfksg'
+    values:
+      - 'cragents003c66i4n7btfksg'
+
+variables:
+  - name: azureSubscription
+    value: ${{ parameters.AZURE_SERVICE_CONNECTION }}
+  - name: ACR_NAME
+    value: ${{ parameters.ACR_NAME }}
+  - name: InstanceNumber
+    value: '003'
+  - name: ResourceGroupName
+    value: ''
+  - name: Location
+    value: 'canadacentral'
+  - name: EnableWindows
+    value: 'true'
+  - name: WindowsNodeCount
+    value: '1'
+  - name: LinuxNodeCount
+    value: '1'
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+stages:
+  - stage: deploy
+    displayName: Deploy AKS + ACR
+    jobs:
+      - job: deploy
+        displayName: Deploy
+        steps:
+          - checkout: self
+
+          - task: AzureCLI@2
+            displayName: 'Deploy AKS and ACR (Bicep)'
+            inputs:
+              azureSubscription: '$(azureSubscription)'
+              scriptType: 'pscore'
+              scriptLocation: 'inlineScript'
+              addSpnToEnvironment: true
+              inlineScript: |
+                Write-Host 'Running infra/bicep/deploy.ps1'
+                $instanceNumber = '$(InstanceNumber)'
+                $rg = '$(ResourceGroupName)'
+                $location = '$(Location)'
+                $enableWindows = ('$(EnableWindows)' -eq 'true')
+                $winCount = [int]'$(WindowsNodeCount)'
+                $linuxCount = [int]'$(LinuxNodeCount)'
+
+                # Directly call the script with explicit named parameters so PowerShell receives typed values
+                # Launch a separate pwsh process passing each argument explicitly. This avoids
+                # Azure Pipelines' inline script quoting/expansion issues that can mangle args.
+                $argList = @('-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-File','./infra/bicep/deploy.ps1',
+                    '-InstanceNumber',$instanceNumber,'-Location',$location,'-WindowsNodeCount',$winCount,'-LinuxNodeCount',$linuxCount)
+                if ($rg -and $rg -ne '') { $argList += @('-ResourceGroupName',$rg) }
+                $argList += "-EnableWindows:$enableWindows"
+
+                Write-Host "Starting pwsh to run deploy.ps1 with args: $($argList -join ' ')"
+                $proc = Start-Process pwsh -ArgumentList $argList -NoNewWindow -Wait -PassThru
+                if ($proc.ExitCode -ne 0) {
+                    Write-Error "deploy.ps1 failed with exit code $($proc.ExitCode)"
+                    exit $proc.ExitCode
+                }
+
+          - task: PublishPipelineArtifact@1
+            displayName: 'Publish deployment outputs (optional)'
+            inputs:
+              targetPath: 'infra/bicep'
+              artifact: 'bicep-deploy'

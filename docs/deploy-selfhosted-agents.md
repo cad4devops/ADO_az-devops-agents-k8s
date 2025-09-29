@@ -22,6 +22,7 @@ Prerequisites
 Inputs / Parameters (notable changes)
 
 - `kubeconfig` (optional): when not supplied the deploy helper will default to `$env:KUBECONFIG` or the standard user kubeconfig at `~/.kube/config`. This makes it easier to run the helper locally without re-specifying the kubeconfig path.
+- `useOnPremAgents` (boolean, pipeline parameter): controls which CI agent pool the pipeline's summary/validation tasks run on. When true the pipeline will prefer the repository's on‑prem pool name (for example `UbuntuLatestPoolOnPrem`) for jobs that must run inside your private CI environment; when false it will use the hosted `ubuntu-latest` image. This parameter is separate from `useAzureLocal` (which only controls where kubeconfig is sourced from).
 - `azDoToken` / AZDO_PAT fallback: If the pipeline parameter for an Azure DevOps token is not explicitly provided the helper accepts the environment variable `AZDO_PAT` as a fallback.
 - ACR credentials: the helper accepts `ACR_ADO_USERNAME` and `ACR_ADO_PASSWORD` from the environment. If one is supplied the other is required — the helper will fail fast on partial credential input to avoid ambiguous failures during image push/pull.
 
@@ -39,7 +40,9 @@ How it works (high level)
 
 Wrapper script and execution model
 
-- To avoid PowerShell parser/tokenization fragility when users run complex CLI strings in-process, the repository includes a small wrapper script that spawns a child `pwsh` process and executes the deploy helper there. This reduces accidental token leakage and makes argument parsing consistent across environments. Use the wrapper when running locally (see `azsh-linux-agent/01-build-and-push.ps1` or the top-level helper depending on the scenario).
+To avoid PowerShell parser/tokenization fragility when users run complex CLI strings in-process, the repository includes a small wrapper script that spawns a child `pwsh` process and executes the deploy helper there. This reduces accidental token leakage and makes argument parsing consistent across environments. Use the wrapper when running locally (see `azsh-linux-agent/01-build-and-push.ps1` or the top-level helper depending on the scenario).
+
+See `copilot-instructions.md` at the repository root for additional guidance for contributors and automated agents, including safe `.tmp/` mock-run helpers for testing build/push flows without network access.
 
 Helm output capture and masking
 
@@ -59,3 +62,8 @@ Notes
 
 - For production, prefer external secret management (AKV CSI driver) instead of baking secrets into CI variables.
 - The exact parameter names and steps vary per repo version — consult the pipeline YAML for precise behavior.
+
+Notes on pool selection
+
+- `useAzureLocal` controls where the pipeline sources the cluster kubeconfig: when true it expects a secure-file kubeconfig (local/on‑prem); when false it will attempt `az aks get-credentials` for AKS clusters.
+- `useOnPremAgents` controls which pipeline pool the jobs run on (on‑prem pool vs hosted images). Set `useOnPremAgents: true` when you want validation or summary tasks to run on your internal on‑prem pool so they exercise the same agent environment your workloads will use.

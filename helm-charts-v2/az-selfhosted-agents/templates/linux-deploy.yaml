@@ -19,6 +19,8 @@ spec:
         {{- include "az-selfhosted-agents.selectorLabels" . | nindent 8 }}
         app: azsh-linux-agent
     spec:
+      nodeSelector:
+        kubernetes.io/os: linux
       containers:
       - name: {{ .Values.linux.deploy.container.name }}
         image: {{ .Values.linux.deploy.container.image }}

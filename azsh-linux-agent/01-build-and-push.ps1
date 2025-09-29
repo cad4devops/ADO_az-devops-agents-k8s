@@ -4,12 +4,29 @@ param(
     [string]$BaseTag = $env:LINUX_BASE_TAG,
     [string]$TagSuffix = $env:TAG_SUFFIX,
     [string]$SemVer = $env:SEMVER_EFFECTIVE,
-    [switch]$DisableLatest
+    [switch]$DisableLatest,
+    # Default ACR short name (no .azurecr.io). Can be overridden by passing this parameter
+    # or by setting the DEFAULT_ACR environment variable in CI.
+    [string]$DefaultAcr = 'cragents003c66i4n7btfksg'
 )
 
 $ErrorActionPreference = 'Stop'
 
-if (-not $ContainerRegistryName) { $ContainerRegistryName = "cragentssgvhe4aipy37o.azurecr.io" }
+if (-not $ContainerRegistryName) {
+    # Prefer an explicit DefaultAcr parameter, then DEFAULT_ACR env var, then built-in fallback
+    if ($DefaultAcr) {
+        $ContainerRegistryName = $DefaultAcr
+    } elseif ($env:DEFAULT_ACR) {
+        $ContainerRegistryName = $env:DEFAULT_ACR
+    } else {
+        $ContainerRegistryName = 'cragents003c66i4n7btfksg'
+    }
+}
+# If user supplied an unqualified registry name (no dot), assume Azure Container Registry and append the azurecr.io suffix
+if ($ContainerRegistryName -and ($ContainerRegistryName -notmatch '\.')) {
+    Write-Host "ContainerRegistryName '$ContainerRegistryName' appears unqualified; appending '.azurecr.io' to form FQDN"
+    $ContainerRegistryName = "$ContainerRegistryName.azurecr.io"
+}
 if (-not $RepositoryName) { $RepositoryName = "linux-sh-agent-docker" }
 if (-not $BaseTag) { $BaseTag = "ubuntu-24.04" }
 
@@ -50,9 +67,24 @@ $acrShort = $ContainerRegistryName.Split('.')[0]
 Write-Host "Logging into ACR: $acrShort"
 az acr login --name $acrShort | Out-Null
 
+$pushFailures = @()
 foreach($t in $tags | Where-Object { $_ -like "$ContainerRegistryName*" }){
     Write-Host "Pushing $t"
-    docker push $t | Write-Host
+    docker push $t 2>&1 | ForEach-Object { Write-Host $_ }
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Push failed for $t (exit code $LASTEXITCODE)"
+        $pushFailures += $t
+    }
 }
 
-Write-Host ("Completed push for {0}:{1}" -f $RepositoryName,$FinalTag) -ForegroundColor Green
+if ($pushFailures.Count -gt 0) {
+    Write-Warning ("Some pushes failed for repository {0}: {1}" -f $RepositoryName, ($pushFailures -join ', '))
+    $allTags = ($tags | Where-Object { $_ -like "$ContainerRegistryName*" })
+    if ($pushFailures.Count -eq $allTags.Count) {
+        Write-Error "All pushes failed for $RepositoryName"
+    } else {
+    Write-Host ("Completed push (partial success) {0}:{1}" -f $RepositoryName,$FinalTag) -ForegroundColor Yellow
+    }
+} else {
+    Write-Host ("Completed push for {0}:{1}" -f $RepositoryName,$FinalTag) -ForegroundColor Green
+}

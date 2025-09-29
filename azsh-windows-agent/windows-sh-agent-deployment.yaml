@@ -24,7 +24,7 @@ spec:
         kubernetes.io/os: windows
       containers:
         - name: kubepodcreation
-          image: cragentssgvhe4aipy37o.azurecr.io/windows-sh-agent-2022:latest
+          image: windows-sh-agent-2022:latest
           env:
             - name: AZP_URL
               valueFrom:

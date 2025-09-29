@@ -22,6 +22,7 @@ Key parameters and behavior
 - `linuxHelloWaitSeconds` (number, default 120): how long the Linux sample job waits for the hello-world container to become ready before the validation run continues. This value is forwarded to the sample pipeline and injected as a literal numeric value to avoid shell interpolation issues.
 - `windowsHelloWaitSeconds` (number, default 180): same as above for Windows sample steps.
 - `useOnPremAgents` (boolean): when true the validation jobs target the in‑repo on‑prem pool name (`UbuntuLatestPoolOnPrem` by default). When false they use hosted images like `ubuntu-latest`. The pipeline uses a template-time conditional to select the pool block.
+	Note: `useOnPremAgents` controls which CI agent pool the validation jobs run on (on‑prem vs hosted). This is distinct from `useAzureLocal`, which controls where kubeconfig is sourced from (local secure file vs `az aks get-credentials`). When running in CI you typically set `useOnPremAgents: true` to run validation steps on your private on‑prem pool so they test the same environment your workloads will run in.
 
 Parallel validation
 
@@ -41,3 +42,5 @@ Troubleshooting
 
 - If agents are not visible in the pool, verify the pod logs for registration errors and network access to `dev.azure.com`.
 - Ensure the service principal / PAT used by the pipeline has permission to list pools and queue builds.
+
+See `copilot-instructions.md` at the repository root for additional contributor guidance, and prefer running the provided wrapper when executing helpers locally to avoid PowerShell tokenization issues and to capture masked Helm debug logs safely.

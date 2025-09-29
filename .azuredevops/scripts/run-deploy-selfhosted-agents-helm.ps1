@@ -19,9 +19,13 @@ if (-not (Test-Path $scriptPath)) { Write-Error "Deploy helper not found at $scr
 # Read environment vars (pipeline will set these)
 $envKube = $env:KUBECONFIG
 $envAzDo = $env:AZDO_PAT
-$envAcrName = $env:ACR_NAME
+$envPipelineAcr = $env:PIPELINE_ACR_NAME
+$envAcrName = if ($envPipelineAcr) { $envPipelineAcr } else { $env:ACR_NAME }
 $envAcrUser = $env:ACR_USERNAME
 $envAcrPass = $env:ACR_PASSWORD
+# Avoid picking up unexpanded pipeline template tokens which look like '$(VAR)'. Treat them as absent.
+if ($envAcrUser -and $envAcrUser -match '^\$\(.+\)$') { Write-Host "Detected unexpanded ACR username token '$envAcrUser' in environment; ignoring."; $envAcrUser = $null }
+if ($envAcrPass -and $envAcrPass -match '^\$\(.+\)$') { Write-Host "Detected unexpanded ACR password token in environment; ignoring."; $envAcrPass = $null }
 $envInstance = $env:INSTANCE_NUMBER
 $envDeployLinux = $env:DEPLOY_LINUX
 $envDeployWindows = $env:DEPLOY_WINDOWS
@@ -29,7 +33,19 @@ $envAzOrg = $env:AZDO_ORG_URL
 
 # Normalize and fallback defaults
 if (-not $envInstance) { $envInstance = '003' }
-if (-not $envAcrName) { $envAcrName = 'cragentssgvhe4aipy37o' }
+
+# Enforce that ACR_NAME is provided by the pipeline parameter. Treat pipeline parameter as the
+# single source of truth for which container registry to use. Fail fast if missing to avoid
+# silently falling back to an incorrect registry.
+if (-not $envAcrName) {
+    Write-Error "ACR_NAME is not set in the job environment and no pipeline ACR was provided. The pipeline must pass the ACR via the ACR_NAME parameter. Aborting to avoid deploying values with an incorrect registry."
+    exit 1
+}
+
+# Log both values (if present) to aid debugging of where the value came from
+if ($envPipelineAcr -and $env:ACR_NAME -and ($envPipelineAcr -ne $env:ACR_NAME)) {
+    Write-Host "Note: PIPELINE_ACR_NAME='$envPipelineAcr' differs from job env ACR_NAME='$($env:ACR_NAME)'. Using PIPELINE_ACR_NAME as authoritative."
+}
 
 # Helper to convert string-ish env values to boolean
 function ToBool([string]$s) {
@@ -60,6 +76,10 @@ Write-Host "Invoking $scriptPath with Instance=$envInstance, AcrName=$envAcrName
 # Build an argument list and pass typed switches/values
 $argList = @()
 if ($envKube) { $argList += '-Kubeconfig'; $argList += $envKube }
+# If the wrapper was given a kubeconfig path (from a previous AzureCLI or secure-file task)
+# tell the deploy script that this is a local/on-prem kubeconfig to ensure it uses the
+# expected local kube context and avoids attempting an az login/fetch.
+if ($envKube) { $argList += '-UseAzureLocal' }
 $argList += '-InstanceNumber'; $argList += $envInstance
 $argList += '-AcrName'; $argList += $envAcrName
 if ($envAcrUser) { $argList += '-AcrUsername'; $argList += $envAcrUser }
