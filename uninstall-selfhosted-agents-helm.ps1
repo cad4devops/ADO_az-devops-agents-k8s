@@ -17,12 +17,12 @@ and Terminating namespaces can be forcibly cleared of finalizers if necessary.
 
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $false)] [string] $InstanceNumber = '003',
+    [Parameter(Mandatory = $true)] [string] $InstanceNumber, #'003'
     [Parameter(Mandatory = $false)] [string] $Kubeconfig = "aks-ado-agents-$InstanceNumber",
-    [Parameter(Mandatory = $false)] [string] $KubeconfigAzureLocal = "my-workload-cluster-dev-014-kubeconfig.yaml",
+    [Parameter(Mandatory = $false)] [string] $KubeconfigAzureLocal, #"my-workload-cluster-dev-014-kubeconfig.yaml"
     [Parameter(Mandatory = $false)] [string] $KubeconfigFolder,        
     [Parameter(Mandatory = $false)] [string] $KubeContext = "aks-ado-agents-$InstanceNumber",
-    [Parameter(Mandatory = $false)] [string] $KubeContextAzureLocal = "my-workload-cluster-dev-014-admin@my-workload-cluster-dev-014",
+    [Parameter(Mandatory = $false)] [string] $KubeContextAzureLocal, #"my-workload-cluster-dev-014-admin@my-workload-cluster-dev-014"
     [Parameter(Mandatory = $false)] [switch] $UseAzureLocal,
     [Parameter(Mandatory = $false)] [string] $AksResourceGroup = "rg-aks-ado-agents-$InstanceNumber",
     [Parameter(Mandatory = $false)] [string] $AksClusterName = "aks-ado-agents-$InstanceNumber",
@@ -31,11 +31,10 @@ param(
     [Parameter(Mandatory = $false)] [bool] $RemoveKedaCRDs = $true,
     [Parameter(Mandatory = $false)] [bool] $RemoveNamespaces = $true,
     [Parameter(Mandatory = $false)] [bool] $RemoveSecrets = $true,
-    [Parameter(Mandatory = $false)] [bool] $ForceFinalize = $true
-    ,
+    [Parameter(Mandatory = $false)] [bool] $ForceFinalize = $true,
     [Parameter(Mandatory = $false)] [string] $AzDevOpsUrl,
     # Backwards-compatible alias used by pipeline templates
-    [Parameter(Mandatory = $false)] [string] $AzureDevOpsOrgUrl = "https://dev.azure.com/cad4devops",
+    [Parameter(Mandatory = $true)] [string] $AzureDevOpsOrgUrl, #"https://dev.azure.com/cad4devops"
     [Parameter(Mandatory = $false)] [string] $AzDevOpsToken,
     [Parameter(Mandatory = $false)] [bool] $RemoveAzDoPools = $true,
     # Pipeline-compatible flags (some pipelines pass these names)
@@ -91,6 +90,36 @@ function Fail([string]$msg) { Write-Error $msg; exit 1 }
 
 Write-Host "Starting uninstall script (instance=$InstanceNumber)"
 
+# Cross-platform green output helper:
+# - On Windows use Write-Host -ForegroundColor (PowerShell host supports it)
+# - On non-Windows or CI agents, emit ANSI green escape sequences so Azure Pipelines
+#   and other terminals that support ANSI colors render the message in green.
+function Write-Green([string]$msg) {
+    try {
+        if ($IsWindows) {
+            Write-Host -ForegroundColor Green $msg
+        }
+        else {
+            # Use ANSI SGR codes: 32 = green, 0 = reset
+            Write-Host "`e[32m$msg`e[0m"
+        }
+    }
+    catch {
+        # Fallback to plain text if something unexpected happens
+        Write-Host $msg
+    }
+}
+
+# If running in Azure-local/on-prem mode require certain params to be provided so uninstall targets the correct cluster and pools
+if ($UseAzureLocal.IsPresent) {
+    $missing = @()
+    if (-not $KubeconfigAzureLocal -or [string]::IsNullOrWhiteSpace($KubeconfigAzureLocal)) { $missing += 'KubeconfigAzureLocal' }
+    if (-not $KubeContextAzureLocal -or [string]::IsNullOrWhiteSpace($KubeContextAzureLocal)) { $missing += 'KubeContextAzureLocal' }
+    if ($missing.Count -gt 0) {
+        Fail ("When -UseAzureLocal is set the following parameters must be provided and non-empty: {0}" -f ($missing -join ', '))
+    }
+}
+
 # Support legacy and new parameter names: normalize to canonical $AzureDevOpsOrgUrl
 if ($AzDevOpsUrl -and -not $AzureDevOpsOrgUrl) { $AzureDevOpsOrgUrl = $AzDevOpsUrl }
 if ($AzureDevOpsOrgUrl -and -not $AzDevOpsUrl) { $AzDevOpsUrl = $AzureDevOpsOrgUrl }
@@ -115,7 +144,8 @@ if (-not $UseAzureLocal.IsPresent) {
     if ($provided) {
         try {
             $isAbs = [System.IO.Path]::IsPathRooted($provided)
-        } catch { $isAbs = $false }
+        }
+        catch { $isAbs = $false }
         if ($isAbs -and (Test-Path $provided)) {
             $env:KUBECONFIG = (Resolve-Path $provided).Path
             $usedProvided = $true
@@ -235,7 +265,7 @@ try {
             if (-not $UseAzureLocal.IsPresent) { Fail "Current kubectl context '$current' does not match expected context '$expectedCtx'. Aborting." }
             else { Write-Warning "Current kubectl context '$current' does not match expected context '$expectedCtx'. Uninstall will continue but may not target intended cluster." }
         }
-        else { Write-Host -ForegroundColor Green "Current kubectl context '$current' matches expected context '$expectedCtx'." }
+        else { Write-Green "Current kubectl context '$current' matches expected context '$expectedCtx'." }
     }
 }
 catch {

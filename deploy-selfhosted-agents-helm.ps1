@@ -25,21 +25,20 @@ This script is intentionally conservative: it will not enable ACR admin or creat
 
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $false)] [string] $InstanceNumber = '003',
+    [Parameter(Mandatory = $true)] [string] $InstanceNumber, #'003'
     [Parameter(Mandatory = $false)] [string] $Kubeconfig = "aks-ado-agents-$InstanceNumber",
-    [Parameter(Mandatory = $false)] [string] $KubeconfigAzureLocal = "my-workload-cluster-dev-014-kubeconfig.yaml",
+    [Parameter(Mandatory = $false)] [string] $KubeconfigAzureLocal, #"my-workload-cluster-dev-014-kubeconfig.yaml"
     [Parameter(Mandatory = $false)] [string] $KubeconfigFolder,
     [Parameter(Mandatory = $false)] [switch] $DeployLinux = $true,
     [Parameter(Mandatory = $false)] [switch] $DeployWindows = $true,
     [Parameter(Mandatory = $false)] [string] $WindowsVersion = '2022',
     [Parameter(Mandatory = $false)] [ValidateSet('docker', 'dind', 'ubuntu22')] [string] $LinuxImageVariant = 'docker',
-    [Parameter(Mandatory = $false)] [string] $AcrName = 'cragents003c66i4n7btfksg',
-    [Parameter(Mandatory = $false)] [string] $AzureDevOpsOrgUrl = 'https://dev.azure.com/cad4devops',    
+    [Parameter(Mandatory = $true)] [string] $AcrName, #'cragents003c66i4n7btfksg'
+    [Parameter(Mandatory = $true)] [string] $AzureDevOpsOrgUrl, #'https://dev.azure.com/cad4devops',    
     [Parameter(Mandatory = $false)] [string] $HelmTimeout = '2m',
-    [Parameter(Mandatory = $false)] [string] $BootstrapPoolName = 'KubernetesPoolWindows',
     [Parameter(Mandatory = $false)] [switch] $UseAzureLocal,
     [Parameter(Mandatory = $false)] [string] $KubeContext = "aks-ado-agents-$InstanceNumber",
-    [Parameter(Mandatory = $false)] [string] $KubeContextAzureLocal = "my-workload-cluster-dev-014-admin@my-workload-cluster-dev-014",
+    [Parameter(Mandatory = $false)] [string] $KubeContextAzureLocal, #"my-workload-cluster-dev-014-admin@my-workload-cluster-dev-014"
     [Parameter(Mandatory = $false)] [string] $AksResourceGroup = "rg-aks-ado-agents-$InstanceNumber",
     [Parameter(Mandatory = $false)] [string] $AksClusterName = "aks-ado-agents-$InstanceNumber",
     [Parameter(Mandatory = $false)] [string] $AcrUsername,
@@ -53,11 +52,29 @@ param(
     [Parameter(Mandatory = $false)] [switch] $EnsureAzDoPools
 )
 
-
-
 function Fail([string]$msg) { Write-Error $msg; exit 1 }
 
 Write-Host "Starting local deploy script (instance=$InstanceNumber)"
+
+# Cross-platform green output helper (same behavior as in uninstall helper)
+function Write-Green([string]$msg) {
+    try {
+        if ($IsWindows) { Write-Host -ForegroundColor Green $msg }
+        else { Write-Host "`e[32m$msg`e[0m" }
+    }
+    catch { Write-Host $msg }
+}
+
+# If running in Azure-local/on-prem mode, require the caller to supply local kubeconfig and context
+# and an explicit bootstrap pool name so downstream operations have the information they need.
+if ($UseAzureLocal.IsPresent) {
+    $missing = @()
+    if (-not $KubeconfigAzureLocal -or [string]::IsNullOrWhiteSpace($KubeconfigAzureLocal)) { $missing += 'KubeconfigAzureLocal' }
+    if (-not $KubeContextAzureLocal -or [string]::IsNullOrWhiteSpace($KubeContextAzureLocal)) { $missing += 'KubeContextAzureLocal' }
+    if ($missing.Count -gt 0) {
+        Fail ("When -UseAzureLocal is set the following parameters must be provided and non-empty: {0}" -f ($missing -join ', '))
+    }
+}
 
 if (-not $WriteValuesOnly.IsPresent) {
     # Resolve effective kubeconfig folder (default to C:\Users\<user>\.kube)
@@ -72,7 +89,7 @@ if (-not $WriteValuesOnly.IsPresent) {
     $effectiveKubeParamName = if ($UseAzureLocal.IsPresent) { 'KubeconfigAzureLocal' } else { 'Kubeconfig' }
 
     # Debug: show which kubeconfig parameter and mode we observed (helps pipeline logs)
-    Write-Host ("DEBUG: UseAzureLocal.IsPresent={0}; effectiveKubeParamName={1}; effectiveKubeParam='{2}'" -f $UseAzureLocal.IsPresent, $effectiveKubeParamName, ($effectiveKubeParam -replace '\\','/'))
+    Write-Host ("DEBUG: UseAzureLocal.IsPresent={0}; effectiveKubeParamName={1}; effectiveKubeParam='{2}'" -f $UseAzureLocal.IsPresent, $effectiveKubeParamName, ($effectiveKubeParam -replace '\\', '/'))
 
     # If the caller provided an explicit kubeconfig (via the selected param) and it exists, prefer it.
     if ($effectiveKubeParam) {
@@ -110,25 +127,25 @@ if (-not $WriteValuesOnly.IsPresent) {
         $env:KUBECONFIG = (Resolve-Path $kubeTmp).Path
         Write-Host "Set KUBECONFIG to $env:KUBECONFIG"
     }
-        else {
-            # Local mode: resolve local kubeconfig by joining folder and filename using the
-            # selected parameter (KubeconfigAzureLocal when -UseAzureLocal, else Kubeconfig).
-            if ($effectiveKubeParam) {
-                try { $isAbs = [System.IO.Path]::IsPathRooted($effectiveKubeParam) } catch { $isAbs = $false }
-                if ($isAbs) { $resolvedLocalKube = $effectiveKubeParam } else { $resolvedLocalKube = Join-Path $effectiveKubeFolder $effectiveKubeParam }
-            }
-            else { $resolvedLocalKube = Join-Path $effectiveKubeFolder 'config\my-workload-cluster-dev-014-kubeconfig.yaml' }
-
-            if (Test-Path $resolvedLocalKube) {
-                $env:KUBECONFIG = (Resolve-Path $resolvedLocalKube).Path
-                Write-Host ("KUBECONFIG not provided; using local kubeconfig: {0}" -f ${env:KUBECONFIG})
-            }
-            else {
-                $legacy = Join-Path $effectiveKubeFolder 'config'
-                if (Test-Path $legacy) { $env:KUBECONFIG = (Resolve-Path $legacy).Path; Write-Host ("Using legacy kubeconfig at {0}" -f ${env:KUBECONFIG}) }
-                else { Fail ("Local kubeconfig not found at either {0} or {1}. Provide -{2} or ensure the default exists." -f $resolvedLocalKube, $legacy, $effectiveKubeParamName) }
-            }
+    else {
+        # Local mode: resolve local kubeconfig by joining folder and filename using the
+        # selected parameter (KubeconfigAzureLocal when -UseAzureLocal, else Kubeconfig).
+        if ($effectiveKubeParam) {
+            try { $isAbs = [System.IO.Path]::IsPathRooted($effectiveKubeParam) } catch { $isAbs = $false }
+            if ($isAbs) { $resolvedLocalKube = $effectiveKubeParam } else { $resolvedLocalKube = Join-Path $effectiveKubeFolder $effectiveKubeParam }
         }
+        else { $resolvedLocalKube = Join-Path $effectiveKubeFolder 'config\my-workload-cluster-dev-014-kubeconfig.yaml' }
+
+        if (Test-Path $resolvedLocalKube) {
+            $env:KUBECONFIG = (Resolve-Path $resolvedLocalKube).Path
+            Write-Host ("KUBECONFIG not provided; using local kubeconfig: {0}" -f ${env:KUBECONFIG})
+        }
+        else {
+            $legacy = Join-Path $effectiveKubeFolder 'config'
+            if (Test-Path $legacy) { $env:KUBECONFIG = (Resolve-Path $legacy).Path; Write-Host ("Using legacy kubeconfig at {0}" -f ${env:KUBECONFIG}) }
+            else { Fail ("Local kubeconfig not found at either {0} or {1}. Provide -{2} or ensure the default exists." -f $resolvedLocalKube, $legacy, $effectiveKubeParamName) }
+        }
+    }
 
     # verify tools
     foreach ($tool in @('kubectl', 'helm')) {
@@ -182,7 +199,7 @@ if (-not $WriteValuesOnly.IsPresent) {
             $current = (& kubectl config current-context 2>$null) -as [string]
             if (-not $current) { Fail "No current kubectl context detected but expected '$expectedCtx'. Ensure KUBECONFIG/context is configured." }
             if ($current.Trim() -ne $expectedCtx.Trim()) { Fail "Current kubectl context '$current' does not match expected context '$expectedCtx'. Aborting." }
-            Write-Host -ForegroundColor Green "Current kubectl context '$current' matches expected context '$expectedCtx'."
+            Write-Green "Current kubectl context '$current' matches expected context '$expectedCtx'."
         }
     }
     catch {

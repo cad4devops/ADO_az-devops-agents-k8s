@@ -20,6 +20,4 @@ Run validation
 
 After deploy, use the validation pipeline (`.azuredevops/pipelines/validate-selfhosted-agents.yml`) to confirm agents register and accept jobs. The validation pipeline can queue a sample run and waits the configured `linuxHelloWaitSeconds` (default 120) before timing out.
 
-- Note: the validation pipeline forwards the numeric `linuxHelloWaitSeconds` parameter as a literal numeric value into the sample pipeline to avoid runtime shell interpolation issues. See `.azuredevops/pipelines/run-on-selfhosted-pool-sample-helm.yaml` for details.
-
-
+- Note: the validation pipeline forwards the numeric `linuxHelloWaitSeconds` parameter as a literal numeric value into the sample pipeline to avoid runtime shell interpolation issues. See `.azuredevops/pipelines/run-on-selfhosted-pool-sample-helm.yml` for details.

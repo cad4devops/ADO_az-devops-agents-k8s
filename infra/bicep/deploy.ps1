@@ -11,9 +11,9 @@ Security: do not pass secrets on the command line in CI; use pipeline-secure var
 #>
 [CmdletBinding()]
 param(    
-    [Parameter(Mandatory = $false)] [string] $InstanceNumber = '003',
+    [Parameter(Mandatory = $true)] [string] $InstanceNumber, #'003'
     [Parameter(Mandatory = $false)] [string] $ResourceGroupName,
-    [Parameter(Mandatory = $false)] [string] $Location = 'canadacentral',
+    [Parameter(Mandatory = $true)] [string] $Location, #'canadacentral'
     [Parameter(Mandatory = $false)] [string] $ContainerRegistryName,
     [Parameter(Mandatory = $false)] [bool] $EnableWindows = $true,
     [Parameter(Mandatory = $false)] [int] $WindowsNodeCount = 1,
@@ -57,7 +57,8 @@ $aksExists = $false
 if ($aks) {
     $aksExists = $true
     Write-Host "Found existing AKS cluster: $aksName"
-} else {
+}
+else {
     Write-Host "No existing AKS cluster found; deployment will create a new AKS resource named: $aksName"
 }
 
@@ -89,7 +90,8 @@ if ($deployResult.properties.outputs) {
 $deployedRegistryName = $null
 if ($deployResult.properties.outputs.containerRegistryName) {
     $deployedRegistryName = $deployResult.properties.outputs.containerRegistryName.value
-} elseif ($ContainerRegistryName) {
+}
+elseif ($ContainerRegistryName) {
     # fallback if the user explicitly provided a name earlier (not recommended)
     $deployedRegistryName = $ContainerRegistryName
 }
@@ -102,12 +104,14 @@ Write-Host 'Deployment finished.'
 # Resolve the ACR resource id using the deployed registry name
 if ($deployedRegistryName) {
     $acrId = az acr show -n $deployedRegistryName -g $ResourceGroupName --query id -o tsv 2>$null
-} else {
+}
+else {
     $acrId = $null
 }
 if (-not $acrId) {
     Write-Warning "Unable to locate ACR resource '$deployedRegistryName' in resource group '$ResourceGroupName'. Skipping role assignment."
-} else {
+}
+else {
     # Get AKS principalId. If the cluster was created by this deployment, query it now.
     if (-not $aksExists) {
         $aks = az aks show -n $aksName -g $ResourceGroupName --only-show-errors | ConvertFrom-Json -ErrorAction SilentlyContinue
@@ -120,10 +124,12 @@ if (-not $acrId) {
         try {
             az role assignment create --assignee-object-id $principalId --role AcrPull --scope $acrId --only-show-errors | Out-Null
             Write-Host "Role assignment created (or already exists)."
-        } catch {
+        }
+        catch {
             Write-Warning "Role assignment command failed: $($_.Exception.Message)"
         }
-    } else {
+    }
+    else {
         Write-Warning "AKS principalId not available; cannot grant AcrPull role. AKS exists: $aksExists"
     }
 }
@@ -134,7 +140,8 @@ if (-not $acrId) {
 if ($EnableWindows) {
     if (-not $aks) {
         Write-Warning "Unable to query AKS cluster '$aksName'; skipping nodepool add."
-    } else {
+    }
+    else {
         # Determine a valid Windows nodepool name. Azure enforces short names for Windows pools
         # (error observed: "Windows agent pool name can not be longer than 6 characters").
         $desiredNodePoolName = 'winpool'
@@ -142,7 +149,8 @@ if ($EnableWindows) {
         if ($desiredNodePoolName.Length -gt $maxPoolNameLen) {
             $nodepoolName = $desiredNodePoolName.Substring(0, $maxPoolNameLen).ToLower()
             Write-Host "Nodepool name '$desiredNodePoolName' truncated to '$nodepoolName' to meet Windows limit ($maxPoolNameLen chars)."
-        } else {
+        }
+        else {
             $nodepoolName = $desiredNodePoolName.ToLower()
         }
 
@@ -155,14 +163,16 @@ if ($EnableWindows) {
 
         if ($nodepoolExists) {
             Write-Host "Windows nodepool '$nodepoolName' already exists on cluster $aksName; skipping nodepool add."
-        } else {
+        }
+        else {
             Write-Host "Adding Windows nodepool '$nodepoolName' to cluster $aksName (node count: $WindowsNodeCount)"
             # Capture output and exit code to detect real failures (az may print errors to stderr)
             $addOutput = az aks nodepool add --cluster-name $aksName --resource-group $ResourceGroupName --name $nodepoolName --os-type Windows --node-count $WindowsNodeCount --only-show-errors 2>&1
             $exitCode = $LASTEXITCODE
             if ($exitCode -ne 0) {
                 Write-Warning "Failed to add Windows nodepool '$nodepoolName' (exit code $exitCode):`n$addOutput"
-            } else {
+            }
+            else {
                 Write-Host "Windows nodepool '$nodepoolName' added."
             }
         }

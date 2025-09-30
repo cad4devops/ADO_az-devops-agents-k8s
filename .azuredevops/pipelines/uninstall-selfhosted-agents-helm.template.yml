@@ -26,54 +26,54 @@ parameters:
     displayName: Uninstall KEDA and remove CRDs
   - name: instanceNumber
     type: string
-    default: "003"
-    displayName: Instance number suffix (e.g. 003)
+    default: "__INSTANCE_NUMBER__"
+    displayName: Instance number suffix (e.g. __INSTANCE_NUMBER__)
   - name: AZURE_SERVICE_CONNECTION
     type: string
-    default: "DOS_DevOpsShield_Prod"
+    default: "__AZURE_SERVICE_CONNECTION__"
     values:
-      - "DOS_DevOpsShield_Prod"
+      - "__AZURE_SERVICE_CONNECTION__"
   - name: ACR_NAME
     type: string
-    default: "cragents003c66i4n7btfksg"
+    default: "__ACR_NAME__"
     values:
-      - "cragents003c66i4n7btfksg"
+      - "__ACR_NAME__"
   - name: useAzureLocal
     type: boolean
     default: false
   - name: aksResourceGroup
     type: string
-    default: "rg-aks-ado-agents-003"
+    default: "rg-aks-ado-agents-__INSTANCE_NUMBER__"
   - name: aksClusterName
     type: string
-    default: "aks-ado-agents-003"
+    default: "aks-ado-agents-__INSTANCE_NUMBER__"
   - name: azureDevOpsOrgUrl
     type: string
-    default: "https://dev.azure.com/cad4devops"
+    default: "__AZURE_DEVOPS_ORG_URL__"
   - name: confirmDeletion
     type: string
     default: "YES"
     displayName: Type YES to actually perform deletions
   - name: bootstrapPoolName
     type: string
-    default: "KubernetesPoolWindows"
+    default: "__BOOTSTRAP_POOL_NAME__"
   - name: kubeconfigAzureLocal
     type: string
-    default: "my-workload-cluster-dev-014-kubeconfig.yaml"
+    default: "__KUBECONFIG_AZURE_LOCAL__"
     displayName: Kubeconfig file name to use in Azure-local mode
   - name: kubeContextAzureLocal
     type: string
-    default: "my-workload-cluster-dev-014-admin@my-workload-cluster-dev-014"
+    default: "__KUBECONTEXT_AZURE_LOCAL__"
     displayName: Kube context name to verify in Azure-local mode
   - name: kubeConfigSecretFile
     type: string
-    default: "AKS_my-workload-cluster-dev-014-kubeconfig_file"
+    default: "__KUBECONFIG_SECRET_FILE__"
   - name: useOnPremAgents
     type: boolean
     default: true # Set to true to use on-premises agents, false to use cloud agents
 
 variables:
-  - group: ADO_az-devops-agents-k8s
+  - group: __AZURE_DEVOPS_VARIABLE_GROUP__
   - name: azureSubscription
     value: ${{ parameters.AZURE_SERVICE_CONNECTION }}
 
@@ -265,4 +265,3 @@ stages:
                 $lines | Out-File $path -Encoding utf8
                 Write-Host "##vso[task.addattachment type=Distributedtask.Core.Summary;name=Uninstall Summary]$path"
                 $lines | ForEach-Object { Write-Host $_ }
-

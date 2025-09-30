@@ -7,6 +7,8 @@ Purpose
 - Deploys the Helm chart (or other infra) that provisions self‑hosted Azure DevOps agent pools on Kubernetes.
 - Sets up the Kubernetes Deployment(s), Secrets, and (optionally) KEDA objects required to run Linux and Windows agent pools.
 
+Note: For a single-command end-to-end onboarding (deploy infra, build images, and provision Azure DevOps resources) see `bootstrap-and-build.ps1` and `docs/bootstrap-and-build.md`.
+
 When to run
 
 - Use this pipeline to create or update the live agent pools in a Kubernetes cluster.

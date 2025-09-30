@@ -17,14 +17,14 @@ parameters:
     default: "docker"
   - name: AZURE_SERVICE_CONNECTION
     type: string
-    default: "DOS_DevOpsShield_Prod"
+    default: "__AZURE_SERVICE_CONNECTION__"
     values:
-      - "DOS_DevOpsShield_Prod"
+      - "__AZURE_SERVICE_CONNECTION__"
   - name: ACR_NAME
     type: string
-    default: "cragents003c66i4n7btfksg"
+    default: "__ACR_NAME__"
     values:
-      - "cragents003c66i4n7btfksg"
+      - "__ACR_NAME__"
   - name: attachAcr
     type: boolean
     default: true
@@ -36,36 +36,36 @@ parameters:
     default: false
   - name: aksResourceGroup
     type: string
-    default: "rg-aks-ado-agents-003"
+    default: "rg-aks-ado-agents-__INSTANCE_NUMBER__"
   - name: aksClusterName
     type: string
-    default: "aks-ado-agents-003"
+    default: "aks-ado-agents-__INSTANCE_NUMBER__"
   - name: azureDevOpsOrgUrl
     type: string
-    default: "https://dev.azure.com/cad4devops"
+    default: "__AZURE_DEVOPS_ORG_URL__"
   - name: instanceNumber
     type: string
-    default: "003"
+    default: "__INSTANCE_NUMBER__"
   - name: bootstrapPoolName
     type: string
-    default: "KubernetesPoolWindows"
+    default: "__BOOTSTRAP_POOL_NAME__"
   - name: kubeconfigAzureLocal
     type: string
-    default: "my-workload-cluster-dev-014-kubeconfig.yaml"
+    default: "__KUBECONFIG_AZURE_LOCAL__"
     displayName: Kubeconfig file name to use in Azure-local mode
   - name: kubeContextAzureLocal
     type: string
-    default: "my-workload-cluster-dev-014-admin@my-workload-cluster-dev-014"
+    default: "__KUBECONTEXT_AZURE_LOCAL__"
     displayName: Kube context name to verify in Azure-local mode
   - name: kubeConfigSecretFile
     type: string
-    default: "AKS_my-workload-cluster-dev-014-kubeconfig_file"
+    default: "__KUBECONFIG_SECRET_FILE__"
   - name: useOnPremAgents
     type: boolean
     default: true # Set to true to use on-premises agents, false to use cloud agents
 
 variables:
-  - group: ADO_az-devops-agents-k8s # to get AZDO_PAT
+  - group: __AZURE_DEVOPS_VARIABLE_GROUP__ # to get AZDO_PAT
   - name: azureSubscription
     value: ${{ parameters.AZURE_SERVICE_CONNECTION }}
 
@@ -493,4 +493,3 @@ stages:
               targetPath: "$(System.DefaultWorkingDirectory)/helm-applied-values.yaml"
               artifact: helm-applied-values
             condition: and(succeeded(), eq(variables['HelmAppliedValuesExists'], 'true'))
-

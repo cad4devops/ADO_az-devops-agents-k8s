@@ -1,0 +1,19 @@
+parameters:
+  - name: helloWaitSeconds
+    type: number
+    default: 120
+
+steps:
+  - bash: |
+      echo "Hello, Welcome to DevOps ABCs World!"
+      # sleep for a configurable time
+      echo "Sleeping for ${{ parameters.helloWaitSeconds }} seconds..."
+      sleep ${{ parameters.helloWaitSeconds }}
+    displayName: "Hello World (sleep=${{ parameters.helloWaitSeconds }}s)"
+  - task: CmdLine@2
+    displayName: test docker
+    inputs:
+      script: |
+        echo Write your commands here
+        echo Hello world
+        docker -v
