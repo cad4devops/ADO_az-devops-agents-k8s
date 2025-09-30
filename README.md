@@ -20,7 +20,7 @@ Run scalable, secure, cost‑efficient Azure DevOps (ADO) self‑hosted agents o
 1. [Why Kubernetes for ADO Agents?](#why-kubernetes)  
 2. [Architecture Overview](#architecture)  
 3. [Repository Structure](#repository-structure)  
-2.1 [Bootstrap & Build Orchestrator](#bootstrap-and-build)
+3.1 [Bootstrap & Build Orchestrator](#bootstrap-and-build)
 4. [Images & Variants](#images--variants)  
 5. [Helm Chart](#helm-chart)  
 6. [Configuration (values.yaml)](#configuration)  
