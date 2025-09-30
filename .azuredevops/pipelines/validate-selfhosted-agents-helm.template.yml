@@ -26,13 +26,13 @@ parameters:
 resources:
   pipelines:
     - pipeline: deployAgentsHelm
-      source: GEN_az-devops-agents-k8s-deploy-self-hosted-agents-helm
+      source: __INSTALL_PIPELINE_NAME__
       trigger: true # automatic trigger on successful run of source pipeline
 
 variables:
-  - group: ADO_az-devops-agents-k8s # to get AZDO_PAT
+  - group: __AZURE_DEVOPS_VARIABLE_GROUP__ # to get AZDO_PAT
   - name: samplePipelineNameHelm
-    value: GEN_az-devops-agents-k8s-run-on-selfhosted-pool-sample-helm # changed to helm pipeline name
+    value: __RUN_ON_POOL_SAMPLE_PIPELINE_NAME__ # changed to helm pipeline name
 
 stages:
   - stage: LoadConfig
@@ -565,4 +565,3 @@ stages:
                 $lines | Out-File $out -Encoding utf8
                 Write-Host "##vso[task.addattachment type=Distributedtask.Core.Summary;name=Agent Validation]$out"
                 $lines | ForEach-Object { Write-Host $_ }
-

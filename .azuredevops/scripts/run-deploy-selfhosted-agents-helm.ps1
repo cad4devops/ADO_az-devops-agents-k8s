@@ -23,6 +23,8 @@ $envPipelineAcr = $env:PIPELINE_ACR_NAME
 $envAcrName = if ($envPipelineAcr) { $envPipelineAcr } else { $env:ACR_NAME }
 $envAcrUser = $env:ACR_USERNAME
 $envAcrPass = $env:ACR_PASSWORD
+$envKubeAzureLocal = $env:KUBECONFIG_AZURE_LOCAL
+$envKubeContextAzureLocal = $env:KUBECONTEXT_AZURE_LOCAL
 # Avoid picking up unexpanded pipeline template tokens which look like '$(VAR)'. Treat them as absent.
 if ($envAcrUser -and $envAcrUser -match '^\$\(.+\)$') { Write-Host "Detected unexpanded ACR username token '$envAcrUser' in environment; ignoring."; $envAcrUser = $null }
 if ($envAcrPass -and $envAcrPass -match '^\$\(.+\)$') { Write-Host "Detected unexpanded ACR password token in environment; ignoring."; $envAcrPass = $null }
@@ -60,7 +62,7 @@ $psParams.InstanceNumber = $envInstance
 $psParams.AcrName = $envAcrName
 if ($envAcrUser) { $psParams.AcrUsername = $envAcrUser }
 if ($envAcrPass) { $psParams.AcrPassword = $envAcrPass }
-if ($envAzOrg) { $psParams.AzureDevOpsOrgUrl = $envAzOrg; $AzDevOpsUrl = $envAzOrg }
+if ($envAzOrg) { $psParams.AzureDevOpsOrgUrl = $envAzOrg }
 if ($envAzDo) { $psParams.AzDevOpsToken = $envAzDo }
 # Ensure pool creation unless explicitly disabled
 $psParams.EnsureAzDoPools = $true
@@ -73,7 +75,7 @@ $masked = if ($envAzDo) { '***' } else { '(none)' }
 Write-Host "Invoking $scriptPath with Instance=$envInstance, AcrName=$envAcrName, AzureDevOpsOrgUrl=$envAzOrg, AzDoToken=$masked, DeployLinux=$(ToBool $envDeployLinux), DeployWindows=$(ToBool $envDeployWindows)"
 
 # Debug: surface the explicit USE_AZURE_LOCAL and KUBECONFIG values so pipeline logs show the mode selected
-Write-Host "DEBUG: USE_AZURE_LOCAL env='${env:USE_AZURE_LOCAL}' KUBECONFIG='${env:KUBECONFIG}'"
+Write-Host "DEBUG: USE_AZURE_LOCAL env='${env:USE_AZURE_LOCAL}' KUBECONFIG='${env:KUBECONFIG}' KUBECONFIG_AZURE_LOCAL='${env:KUBECONFIG_AZURE_LOCAL}' KUBECONTEXT_AZURE_LOCAL='${env:KUBECONTEXT_AZURE_LOCAL}'"
 
 # Call the deploy script in a new PowerShell process to avoid in-process parsing/context issues
 # Build an argument list and pass typed switches/values
@@ -86,6 +88,9 @@ if ($envKube) { $argList += '-Kubeconfig'; $argList += $envKube }
 if ($env:USE_AZURE_LOCAL -and (ToBool $env:USE_AZURE_LOCAL)) {
     Write-Host "DEBUG: Wrapper detected USE_AZURE_LOCAL=true; forwarding -UseAzureLocal to child"
     $argList += '-UseAzureLocal'
+    # If pipeline provided local kubeconfig and context values, forward them explicitly
+    if ($envKubeAzureLocal) { $argList += '-KubeconfigAzureLocal'; $argList += $envKubeAzureLocal }
+    if ($envKubeContextAzureLocal) { $argList += '-KubeContextAzureLocal'; $argList += $envKubeContextAzureLocal }
 } else {
     Write-Host "DEBUG: Wrapper not forwarding -UseAzureLocal (USE_AZURE_LOCAL='${env:USE_AZURE_LOCAL}')"
 }

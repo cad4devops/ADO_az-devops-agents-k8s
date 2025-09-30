@@ -1,0 +1,771 @@
+## Weekly build & push of Linux & Windows Azure DevOps self-hosted agent images
+# Clean canonical pipeline (re-written)
+# Features:
+#  * Weekly schedule only (no CI trigger)
+#  * Semantic version (GitVersion ContinuousDeployment) with fallback yyyyMMdd-shortSha
+#  * Optional fail if fallback is used (failOnFallback)
+#  * Optional git tag creation v<semver>
+#  * Cross-job outputs (SEMVER_EFFECTIVE, SEMVER_MODE)
+#  * Preflight ACR permission validation
+#  * Separate Linux and Windows build jobs (skip flags)
+#  * Digest capture -> manifests artifact
+#  * Tag existence verification
+#  * tags.json inventory artifact
+#  * Optional SBOM placeholder
+
+trigger: none
+
+schedules:
+  - cron: "0 2 * * 1" # Monday 02:00 UTC
+    displayName: Weekly Rebuild & Push Agents
+    branches:
+      include:
+        - main
+    always: true
+
+parameters:
+  - name: AZURE_SERVICE_CONNECTION
+    type: string
+    default: "__AZURE_SERVICE_CONNECTION__"
+    values:
+      - "__AZURE_SERVICE_CONNECTION__"
+  - name: ACR_NAME
+    type: string
+    default: "__ACR_NAME__"
+    values:
+      - "__ACR_NAME__"
+  - name: skipLinux
+    type: boolean
+    default: false
+    displayName: Skip Linux build/push
+  - name: skipWindows
+    type: boolean
+    default: false
+    displayName: Skip Windows build/push
+  - name: useGitVersion
+    type: boolean
+    default: true
+    displayName: Use GitVersion for semantic version & create git tag
+  - name: createGitTag
+    type: boolean
+    default: true
+    displayName: Create & push git tag when using GitVersion
+  - name: generateSbom
+    type: boolean
+    default: true
+    displayName: Generate simple SBOM manifest (placeholder)
+  - name: failOnFallback
+    type: boolean
+    default: true
+    displayName: Fail pipeline if GitVersion fallback (date+sha) is used
+  - name: useOnPremAgents
+    type: boolean
+    default: true # Set to true to use on-premises agents, false to use cloud agents
+
+variables:
+  - name: ACR_NAME
+    value: ${{ parameters.ACR_NAME }}
+  - name: LINUX_REPOSITORY_NAME
+    value: linux-sh-agent-docker
+  - name: WINDOWS_VERSIONS
+    value: 2019,2022,2025
+  - name: AZURE_SERVICE_CONNECTION
+    value: ${{ parameters.AZURE_SERVICE_CONNECTION }}
+
+jobs:
+  - job: Versioning
+    displayName: Resolve semantic version / tag suffix
+    pool:
+      ${{ if parameters.useOnPremAgents }}:
+        name: UbuntuLatestPoolOnPrem
+      ${{ else }}:
+        vmImage: ubuntu-latest
+    steps:
+      - checkout: self
+        fetchDepth: 0
+        persistCredentials: true
+      - pwsh: |
+          $ErrorActionPreference = 'Stop'
+          Write-Host '--- Versioning Step ---'
+          $fallback = (Get-Date -Format 'yyyyMMdd') + '-' + (git rev-parse --short=7 HEAD)
+          $effective = $null
+          $mode = 'Unknown'
+          # Convert template parameters to proper booleans for PowerShell logic
+          $useGitVersion   = [System.Convert]::ToBoolean('${{ parameters.useGitVersion }}')
+          $createGitTag    = [System.Convert]::ToBoolean('${{ parameters.createGitTag }}')
+          $failOnFallback  = [System.Convert]::ToBoolean('${{ parameters.failOnFallback }}')
+
+          if (-not $useGitVersion) {
+            Write-Host 'useGitVersion=false -> using fallback date+sha.'
+            $effective = $fallback
+            $mode = 'Fallback'
+          }
+          else {
+            $gvCmd = Get-Command dotnet-gitversion -ErrorAction SilentlyContinue
+            if(-not $gvCmd){
+              Write-Host 'Installing GitVersion.Tool (dotnet global)...'
+              dotnet tool install --global GitVersion.Tool --version 5.* --ignore-failed-sources | Out-Null
+              $env:PATH += ":$HOME/.dotnet/tools"
+              $gvCmd = Get-Command dotnet-gitversion -ErrorAction SilentlyContinue
+            }
+            if(-not $gvCmd){ Write-Warning 'GitVersion not available; will fallback.' }
+            function Invoke-GV([switch]$AllowRetry){
+              $args = @('/output','json','/nocache')
+              if(Test-Path GitVersion.yml){ $args += @('/config','GitVersion.yml') }
+              $raw = & $gvCmd @args 2>&1
+              if($LASTEXITCODE -ne 0){
+                if($AllowRetry){
+                  if(Test-Path .git/shallow){ git fetch --unshallow || git fetch --depth=1000 }
+                  $raw = & $gvCmd @args 2>&1
+                  if($LASTEXITCODE -ne 0){ return $null }
+                } else { return $null }
+              }
+              try { return ($raw | ConvertFrom-Json) } catch { return $null }
+            }
+            if($gvCmd){
+              $gv = Invoke-GV -AllowRetry
+              if($gv){
+                $full = $gv.MajorMinorPatch; if(-not $full){ $full = $gv.FullSemVer }
+                $full = ($full -split '-')[0]; $full = ($full -split '\+')[0]
+                if($full -match '^[0-9]+\.[0-9]+\.[0-9]+$'){
+                  $effective = $full
+                  $mode = 'GitVersion'
+                  Write-Host "Semantic version resolved: $full"
+                  if ($createGitTag) {
+                    $tagName = "v$full"
+                    if(git tag --list $tagName){
+                      Write-Host "Tag $tagName already exists (no push needed)."
+                    }
+                    else {
+                      git config user.name 'azure-pipeline'
+                      git config user.email 'build@local'
+                      git tag -a $tagName -m "Automated version tag $full"
+                      $accessToken = $env:SYSTEM_ACCESSTOKEN
+                      if([string]::IsNullOrWhiteSpace($accessToken)){
+                        Write-Warning 'SYSTEM_ACCESSTOKEN not available; cannot push tag (enable \"Allow scripts to access OAuth token\" or provide a PAT). Tag created locally only.'
+                      }
+                      else {
+                        try {
+                          # Use inline -c to avoid persisting token in repo config
+                          git -c http.extraheader="AUTHORIZATION: bearer $accessToken" push origin $tagName
+                          if($LASTEXITCODE -eq 0){
+                            Write-Host "Created & pushed tag $tagName"
+                            Write-Host "##vso[task.setvariable variable=GIT_TAG_CREATED;isOutput=true]true"
+                          } else {
+                            Write-Warning "git push exited with code $LASTEXITCODE; tag push skipped." 
+                          }
+                        } catch {
+                          Write-Warning ("Failed to push tag {0}: {1}" -f $tagName, $_.Exception.Message)
+                        }
+                      }
+                    }
+                  }
+                  Write-Host "##vso[task.setvariable variable=SEMVER_MAJOR]$($gv.Major)"
+                  Write-Host "##vso[task.setvariable variable=SEMVER_MINOR]$($gv.Minor)"
+                  Write-Host "##vso[task.setvariable variable=SEMVER_PATCH]$($gv.Patch)"
+                } else { Write-Warning "Normalized version invalid -> fallback." }
+              }
+            }
+          }
+          if(-not $effective){ $effective = $fallback; if($mode -eq 'Unknown'){ $mode = 'Fallback' }; Write-Warning "Using fallback tag suffix: $effective" }
+          if($mode -eq 'Fallback' -and $useGitVersion){
+            Write-Warning 'GitVersion requested but fallback used.'
+            if($failOnFallback){ Write-Error 'Failing because failOnFallback=true and semantic version could not be resolved.' }
+          }
+          Write-Host "Using effective tag suffix: $effective (mode=$mode)"
+          Write-Host "##vso[task.setvariable variable=GLOBAL_TAG_SUFFIX]$effective"
+          Write-Host "##vso[task.setvariable variable=SEMVER_EFFECTIVE;isOutput=true]$effective"
+          Write-Host "##vso[task.setvariable variable=SEMVER_MODE;isOutput=true]$mode"
+        name: SetSemVer
+        displayName: Resolve & output tag suffix
+        env:
+          SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+      - pwsh: |
+          $skipLinux = [System.Convert]::ToBoolean('${{ parameters.skipLinux }}')
+          $skipWindows = [System.Convert]::ToBoolean('${{ parameters.skipWindows }}')
+          if ($skipLinux -and $skipWindows) { Write-Error 'Both skipLinux and skipWindows are true; nothing to build.' }
+          else { Write-Host "Skip combination valid. (skipLinux=$skipLinux, skipWindows=$skipWindows)" }
+        displayName: Validate skip parameters
+
+  - job: Preflight
+    displayName: "Preflight: Validate ACR & Permissions"
+    dependsOn: [Versioning]
+    pool:
+      ${{ if parameters.useOnPremAgents }}:
+        name: UbuntuLatestPoolOnPrem
+      ${{ else }}:
+        vmImage: ubuntu-latest
+    steps:
+      - checkout: self
+      - task: AzureCLI@2
+        name: PreflightVars
+        displayName: Check ACR existence & permissions
+        inputs:
+          azureSubscription: $(AZURE_SERVICE_CONNECTION)
+          scriptType: pscore
+          scriptLocation: inlineScript
+          failOnStandardError: true
+          inlineScript: |
+            $ErrorActionPreference='Stop'
+            $acrFqdn = "$(ACR_NAME)"; if(-not $acrFqdn){ throw 'ACR_NAME variable is empty' }
+            $acrShort = $acrFqdn.Split('.')[0]
+            Write-Host "Preflight validating ACR: $acrShort ($acrFqdn)"
+            az acr show --name $acrShort --only-show-errors 1>$null 2>$null || throw "ACR $acrShort not accessible or does not exist"
+            az acr repository list --name $acrShort --top 1 --output tsv 1>$null 2>$null || throw 'Unable to list repositories - insufficient ACR permissions'
+            az acr login --name $acrShort 1>$null 2>$null || throw 'acr login failed'
+            $token = az acr login --name $acrShort --expose-token --output tsv --query accessToken 2>$null
+            if(-not $token){ throw 'Failed to obtain ACR access token (push permission may be missing)' }
+            Write-Host 'ACR permissions validated.'
+            Write-Host "##vso[task.setvariable variable=ACR_READY;isOutput=true]true"
+
+      - task: AzureCLI@2
+        name: DetectAcrCommand
+        displayName: Detect working ACR manifest command
+        inputs:
+          azureSubscription: $(AZURE_SERVICE_CONNECTION)
+          scriptType: pscore
+          scriptLocation: inlineScript
+          failOnStandardError: false
+          inlineScript: |
+            $ErrorActionPreference='Stop'
+            $acrFqdn = "$(ACR_NAME)"; if(-not $acrFqdn){ Write-Warning 'ACR_NAME empty'; Write-Host "##vso[task.setvariable variable=ACR_DIGEST_COMMAND;isOutput=true]az acr repository show-manifests --name <acr> --repository <repo> --output json"; exit 0 }
+            $acrShort = $acrFqdn.Split('.')[0]
+            $repo = "$(LINUX_REPOSITORY_NAME)"
+            if(-not $repo){ $repo = az acr repository list --name $acrShort --top 1 -o tsv }
+            $fqRepo = "$acrFqdn/$repo"
+            $candidates = @(
+              "az acr repository show-manifests --name $acrShort --repository $repo --output json",
+              "az acr repository show-manifests --name $acrShort $fqRepo --output json",
+              "az acr manifest list-metadata --name $acrShort $fqRepo --output json",
+              "az acr manifest list-metadata --name $acrShort --repository $repo --output json",
+              "az acr repository show-tags --name $acrShort --repository $repo --output json"
+            )
+            $found = $false
+            foreach($cmd in $candidates){
+              Write-Host "Trying: $cmd"
+              try{ $out = bash -lc "$cmd" 2>&1; $rc = $LASTEXITCODE } catch { $out = $_.Exception.Message; $rc = 1 }
+              if($rc -ne 0){ Write-Host "Non-zero exit: $rc"; continue }
+              $outStr = if($out -is [System.Array]) { $out -join "`n" } else { [string]$out }
+              $firstBracket = $outStr.IndexOf('[')
+              if($firstBracket -ge 0){ $jsonText = $outStr.Substring($firstBracket) } else { $jsonText = $outStr }
+              try{
+                $obj = $jsonText | ConvertFrom-Json -ErrorAction Stop
+                $arr = if($obj -is [System.Array]){ $obj } else { @($obj) }
+                foreach($i in $arr){
+                  if($i.PSObject.Properties.Name -contains 'digest'){ $found = $true; break }
+                  if($i.PSObject.Properties.Name -contains 'value' -and $i.value -is [System.Array]){
+                    foreach($v in $i.value){ if($v.PSObject.Properties.Name -contains 'digest'){ $found = $true; break } }
+                    if($found){ break }
+                  }
+                }
+              } catch { }
+              if(-not $found){ $m = [regex]::Match($outStr, 'sha256:[a-f0-9]{64}'); if($m.Success){ $found = $true } }
+              if($found){
+                Write-Host "Detected working command: $cmd"
+                Write-Host "##vso[task.setvariable variable=ACR_DIGEST_COMMAND;isOutput=true]$cmd"
+                break
+              }
+            }
+            if(-not $found){
+              Write-Warning 'No working ACR manifest command detected; defaulting to show-manifests --repository'
+              Write-Host "##vso[task.setvariable variable=ACR_DIGEST_COMMAND;isOutput=true]az acr repository show-manifests --name $acrShort --repository $repo --output json"
+            }
+            # Avoid failing the AzureCLI task due to non-critical command exit codes seen above.
+            exit 0
+
+  - job: LinuxAgentImage
+    displayName: Linux Agent Image Build & Push
+    dependsOn: [Versioning, Preflight]
+    condition: and(succeeded(), eq(dependencies.Preflight.outputs['PreflightVars.ACR_READY'],'true'), eq(${{ parameters.skipLinux }}, false))
+    pool:
+      ${{ if parameters.useOnPremAgents }}:
+        name: UbuntuLatestPoolOnPrem
+      ${{ else }}:
+        vmImage: ubuntu-latest
+    variables:
+      EFFECTIVE_TAG_SUFFIX: $[ dependencies.Versioning.outputs['SetSemVer.SEMVER_EFFECTIVE'] ]
+      DETECTED_ACR_CMD: $[ dependencies.Preflight.outputs['DetectAcrCommand.ACR_DIGEST_COMMAND'] ]
+    steps:
+      - checkout: self
+        clean: true
+      - pwsh: |
+          Write-Host "[LinuxAgentImage] EFFECTIVE_TAG_SUFFIX=$env:EFFECTIVE_TAG_SUFFIX"
+          if(-not $env:EFFECTIVE_TAG_SUFFIX){ Write-Warning 'EFFECTIVE_TAG_SUFFIX is empty - semantic tag will not be added.' }
+        displayName: Debug tag suffix (Linux)
+      - task: AzureCLI@2
+        name: BuildLinux
+        displayName: Run Linux build script
+        inputs:
+          azureSubscription: $(AZURE_SERVICE_CONNECTION)
+          scriptType: pscore
+          scriptLocation: scriptPath
+          scriptPath: azsh-linux-agent/01-build-and-push.ps1
+          arguments: -DefaultAcr $(ACR_NAME)
+          workingDirectory: azsh-linux-agent
+          failOnStandardError: false
+        env:
+          ACR_NAME: $(ACR_NAME)
+          LINUX_REPOSITORY_NAME: $(LINUX_REPOSITORY_NAME)
+          TAG_SUFFIX: $(EFFECTIVE_TAG_SUFFIX)
+          SEMVER_EFFECTIVE: $(EFFECTIVE_TAG_SUFFIX)
+      - publish: azsh-linux-agent
+        artifact: linux-build-context
+        condition: succeededOrFailed()
+      - pwsh: |
+          $ErrorActionPreference='Stop'
+          $tag = '$(EFFECTIVE_TAG_SUFFIX)'
+          if(-not $tag){ Write-Warning 'No tag suffix -> skip digest.'; exit 0 }
+        displayName: Pre-digest validation (Linux)
+      - task: AzureCLI@2
+        displayName: Capture Linux image digest (ACR auth)
+        inputs:
+          azureSubscription: $(AZURE_SERVICE_CONNECTION)
+          scriptType: pscore
+          scriptLocation: inlineScript
+          failOnStandardError: false
+          inlineScript: |
+            $ErrorActionPreference='Stop'
+            $acrFqdn = "$(ACR_NAME)"; if(-not $acrFqdn){ Write-Error 'ACR_NAME empty'; exit 1 }
+            $acr=$acrFqdn.Split('.')[0]
+            $repo = "$(LINUX_REPOSITORY_NAME)"
+            $tag = "$(EFFECTIVE_TAG_SUFFIX)"
+            if(-not $tag){ Write-Host 'No effective tag; exiting.'; exit 0 }
+            Write-Host ("Collecting digest for {0}:{1}" -f $repo,$tag)
+            $digest = $null
+            # Use the ACR_DIGEST_COMMAND detected by Preflight (job output), provided as a job variable
+            $detected = "$(DETECTED_ACR_CMD)"
+            if([string]::IsNullOrWhiteSpace($detected)){
+              Write-Host 'No detected ACR_DIGEST_COMMAND from Preflight; using default show-manifests --repository'
+              $detected = "az acr repository show-manifests --name $acr --repository $repo --output json"
+            }
+            $jmes2 = "[?tags[?@=='{0}']].digest" -f $tag
+            # replace placeholders if present
+            $cmd = $detected.Replace('<acr>',$acr).Replace('<repo>',$repo)
+            # ensure query is set to select digest by tag
+            if(-not ($cmd -match '--query')){ $cmd = "$cmd --query `"$jmes2`" -o tsv" }
+            $digest = bash -lc "$cmd" 2>&1 | Select-Object -First 1
+            if(-not $digest){ Write-Warning ("Digest not found for {0}:{1}" -f $repo,$tag) }
+            New-Item -ItemType Directory -Force -Path $(Pipeline.Workspace)/manifests | Out-Null
+            ("{0}:{1}={2}" -f $repo,$tag,$digest) | Out-File $(Pipeline.Workspace)/manifests/linux-digest.txt -Encoding utf8
+
+  - job: WindowsAgentImage_2019
+    displayName: Windows Agent Image Build & Push (2019)
+    dependsOn: [Versioning, Preflight]
+    condition: and(succeeded(), eq(dependencies.Preflight.outputs['PreflightVars.ACR_READY'],'true'), eq(${{ parameters.skipWindows }}, false))
+    pool:
+      ${{ if parameters.useOnPremAgents }}:
+        name: WindowsLatestPoolOnPrem
+      ${{ else }}:
+        vmImage: windows-latest
+    variables:
+      WIN_VERSION: "2019"
+      EFFECTIVE_TAG_SUFFIX: $[ dependencies.Versioning.outputs['SetSemVer.SEMVER_EFFECTIVE'] ]
+      DETECTED_ACR_CMD: $[ dependencies.Preflight.outputs['DetectAcrCommand.ACR_DIGEST_COMMAND'] ]
+    steps:
+      - checkout: self
+        clean: true
+      - pwsh: |
+          Write-Host "[WindowsAgentImage 2019] EFFECTIVE_TAG_SUFFIX=$env:EFFECTIVE_TAG_SUFFIX"
+          if(-not $env:EFFECTIVE_TAG_SUFFIX){ Write-Warning 'EFFECTIVE_TAG_SUFFIX is empty - semantic tag will not be added.' }
+        displayName: Debug tag suffix (Windows 2019)
+      - task: AzureCLI@2
+        name: BuildWindows2019
+        displayName: Run Windows build script (2019)
+        inputs:
+          azureSubscription: $(AZURE_SERVICE_CONNECTION)
+          scriptType: pscore
+          scriptLocation: scriptPath
+          scriptPath: azsh-windows-agent/01-build-and-push.ps1
+          arguments: -DefaultAcr $(ACR_NAME) -WindowsVersions $(WIN_VERSION)
+          workingDirectory: azsh-windows-agent
+          failOnStandardError: false
+        env:
+          ACR_NAME: $(ACR_NAME)
+          TAG_SUFFIX: $(EFFECTIVE_TAG_SUFFIX)
+          SEMVER_EFFECTIVE: $(EFFECTIVE_TAG_SUFFIX)
+          WINDOWS_VERSIONS: $(WIN_VERSION)
+          WIN_VERSION: $(WIN_VERSION)
+      - publish: azsh-windows-agent
+        artifact: windows-build-context-2019
+        condition: succeededOrFailed()
+      - task: AzureCLI@2
+        displayName: Capture Windows image digests (2019)
+        name: CaptureWindowsDigests2019
+        inputs:
+          azureSubscription: $(AZURE_SERVICE_CONNECTION)
+          scriptType: pscore
+          scriptLocation: inlineScript
+          failOnStandardError: false
+          inlineScript: |
+            $ErrorActionPreference='Stop'
+            $acrFqdn = "$(ACR_NAME)"; if(-not $acrFqdn){ Write-Error 'ACR_NAME empty'; exit 1 }
+            $acr = $acrFqdn.Split('.')[0]
+            $tag = '$(EFFECTIVE_TAG_SUFFIX)'
+            if(-not $tag){ Write-Warning 'No EFFECTIVE_TAG_SUFFIX provided; skipping digest capture.'; exit 0 }
+            # Only collect digest for this job's Windows version
+            $win = "$(WIN_VERSION)".Trim()
+            if(-not $win){ Write-Warning 'WIN_VERSION not set for this job; skipping.'; exit 0 }
+            $repo = "windows-sh-agent-$win"
+            New-Item -ItemType Directory -Force -Path $(Pipeline.Workspace)/manifests | Out-Null
+            Write-Host ("Collecting digest for {0}:{1}" -f $repo,$tag)
+            $digest = $null
+            $detected = "$(DETECTED_ACR_CMD)"
+            if([string]::IsNullOrWhiteSpace($detected)){
+              Write-Host 'No detected ACR_DIGEST_COMMAND from Preflight; using default show-manifests --repository'
+              $detected = "az acr repository show-manifests --name $acr --repository $repo --output json"
+            }
+            $jmes2 = "[?tags[?@=='{0}']].digest" -f $tag
+            $cmd = $detected.Replace('<acr>',$acr).Replace('<repo>',$repo)
+            if(-not ($cmd -match '--query')){ $cmd = "$cmd --query `"$jmes2`" -o tsv" }
+            $digest = bash -lc "$cmd" 2>&1 | Select-Object -First 1
+            if(-not $digest){
+              Write-Warning ("Digest not found for {0}:{1}" -f $repo,$tag)
+              $digestOut = ''
+            } else {
+              Write-Host ("Digest for {0}:{1} -> {2}" -f $repo,$tag,$digest)
+              $digestOut = $digest
+            }
+            ("{0}:{1}={2}" -f $repo,$tag,$digestOut) | Out-File $(Pipeline.Workspace)/manifests/windows-$win-digest.txt -Encoding utf8
+            Write-Host 'Windows digests collection complete.'
+
+  - job: WindowsAgentImage_2022
+    displayName: Windows Agent Image Build & Push (2022)
+    dependsOn: [Versioning, Preflight]
+    condition: and(succeeded(), eq(dependencies.Preflight.outputs['PreflightVars.ACR_READY'],'true'), eq(${{ parameters.skipWindows }}, false))
+    pool:
+      ${{ if parameters.useOnPremAgents }}:
+        name: WindowsLatestPoolOnPrem
+      ${{ else }}:
+        vmImage: windows-latest
+    variables:
+      WIN_VERSION: "2022"
+      EFFECTIVE_TAG_SUFFIX: $[ dependencies.Versioning.outputs['SetSemVer.SEMVER_EFFECTIVE'] ]
+      DETECTED_ACR_CMD: $[ dependencies.Preflight.outputs['DetectAcrCommand.ACR_DIGEST_COMMAND'] ]
+    steps:
+      - checkout: self
+        clean: true
+      - pwsh: |
+          Write-Host "[WindowsAgentImage 2022] EFFECTIVE_TAG_SUFFIX=$env:EFFECTIVE_TAG_SUFFIX"
+          if(-not $env:EFFECTIVE_TAG_SUFFIX){ Write-Warning 'EFFECTIVE_TAG_SUFFIX is empty - semantic tag will not be added.' }
+        displayName: Debug tag suffix (Windows 2022)
+      # ...existing Windows build task above kept; duplicate block removed
+      - task: AzureCLI@2
+        name: BuildWindows2022
+        displayName: Run Windows build script (2022)
+        inputs:
+          azureSubscription: $(AZURE_SERVICE_CONNECTION)
+          scriptType: pscore
+          scriptLocation: scriptPath
+          scriptPath: azsh-windows-agent/01-build-and-push.ps1
+          arguments: -DefaultAcr $(ACR_NAME) -WindowsVersions $(WIN_VERSION)
+          workingDirectory: azsh-windows-agent
+          failOnStandardError: false
+        env:
+          ACR_NAME: $(ACR_NAME)
+          TAG_SUFFIX: $(EFFECTIVE_TAG_SUFFIX)
+          SEMVER_EFFECTIVE: $(EFFECTIVE_TAG_SUFFIX)
+          WINDOWS_VERSIONS: $(WIN_VERSION)
+          WIN_VERSION: $(WIN_VERSION)
+      - publish: azsh-windows-agent
+        artifact: windows-build-context-2022
+        condition: succeededOrFailed()
+      - task: AzureCLI@2
+        displayName: Capture Windows image digests (2022)
+        name: CaptureWindowsDigests2022
+        inputs:
+          azureSubscription: $(AZURE_SERVICE_CONNECTION)
+          scriptType: pscore
+          scriptLocation: inlineScript
+          failOnStandardError: false
+          inlineScript: |
+            $ErrorActionPreference='Stop'
+            $acrFqdn = "$(ACR_NAME)"; if(-not $acrFqdn){ Write-Error 'ACR_NAME empty'; exit 1 }
+            $acr = $acrFqdn.Split('.')[0]
+            $tag = '$(EFFECTIVE_TAG_SUFFIX)'
+            if(-not $tag){ Write-Warning 'No EFFECTIVE_TAG_SUFFIX provided; skipping digest capture.'; exit 0 }
+            # Only collect digest for this job's Windows version
+            $win = "$(WIN_VERSION)".Trim()
+            if(-not $win){ Write-Warning 'WIN_VERSION not set for this job; skipping.'; exit 0 }
+            $repo = "windows-sh-agent-$win"
+            New-Item -ItemType Directory -Force -Path $(Pipeline.Workspace)/manifests | Out-Null
+            Write-Host ("Collecting digest for {0}:{1}" -f $repo,$tag)
+            $digest = $null
+            $detected = "$(DETECTED_ACR_CMD)"
+            if([string]::IsNullOrWhiteSpace($detected)){
+              Write-Host 'No detected ACR_DIGEST_COMMAND from Preflight; using default show-manifests --repository'
+              $detected = "az acr repository show-manifests --name $acr --repository $repo --output json"
+            }
+            $jmes2 = "[?tags[?@=='{0}']].digest" -f $tag
+            $cmd = $detected.Replace('<acr>',$acr).Replace('<repo>',$repo)
+            if(-not ($cmd -match '--query')){ $cmd = "$cmd --query `"$jmes2`" -o tsv" }
+            $digest = bash -lc "$cmd" 2>&1 | Select-Object -First 1
+            if(-not $digest){
+              Write-Warning ("Digest not found for {0}:{1}" -f $repo,$tag)
+              $digestOut = ''
+            } else {
+              Write-Host ("Digest for {0}:{1} -> {2}" -f $repo,$tag,$digest)
+              $digestOut = $digest
+            }
+            ("{0}:{1}={2}" -f $repo,$tag,$digestOut) | Out-File $(Pipeline.Workspace)/manifests/windows-$win-digest.txt -Encoding utf8
+            Write-Host 'Windows digests collection complete.'
+
+  - job: WindowsAgentImage_2025
+    displayName: Windows Agent Image Build & Push (2025)
+    dependsOn: [Versioning, Preflight]
+    condition: and(succeeded(), eq(dependencies.Preflight.outputs['PreflightVars.ACR_READY'],'true'), eq(${{ parameters.skipWindows }}, false))
+    pool:
+      ${{ if parameters.useOnPremAgents }}:
+        name: WindowsLatestPoolOnPrem
+      ${{ else }}:
+        vmImage: windows-latest
+    variables:
+      WIN_VERSION: "2025"
+      EFFECTIVE_TAG_SUFFIX: $[ dependencies.Versioning.outputs['SetSemVer.SEMVER_EFFECTIVE'] ]
+      DETECTED_ACR_CMD: $[ dependencies.Preflight.outputs['DetectAcrCommand.ACR_DIGEST_COMMAND'] ]
+    steps:
+      - checkout: self
+        clean: true
+      - pwsh: |
+          Write-Host "[WindowsAgentImage 2025] EFFECTIVE_TAG_SUFFIX=$env:EFFECTIVE_TAG_SUFFIX"
+          if(-not $env:EFFECTIVE_TAG_SUFFIX){ Write-Warning 'EFFECTIVE_TAG_SUFFIX is empty - semantic tag will not be added.' }
+        displayName: Debug tag suffix (Windows 2025)
+      - task: AzureCLI@2
+        name: BuildWindows2025
+        displayName: Run Windows build script (2025)
+        inputs:
+          azureSubscription: $(AZURE_SERVICE_CONNECTION)
+          scriptType: pscore
+          scriptLocation: scriptPath
+          scriptPath: azsh-windows-agent/01-build-and-push.ps1
+          arguments: -DefaultAcr $(ACR_NAME) -WindowsVersions $(WIN_VERSION)
+          workingDirectory: azsh-windows-agent
+          failOnStandardError: false
+        env:
+          ACR_NAME: $(ACR_NAME)
+          TAG_SUFFIX: $(EFFECTIVE_TAG_SUFFIX)
+          SEMVER_EFFECTIVE: $(EFFECTIVE_TAG_SUFFIX)
+          WINDOWS_VERSIONS: $(WIN_VERSION)
+          WIN_VERSION: $(WIN_VERSION)
+      # ...existing Windows build task above kept; duplicate block removed
+      - publish: azsh-windows-agent
+        artifact: windows-build-context-2025
+        condition: succeededOrFailed()
+      - task: AzureCLI@2
+        displayName: Capture Windows image digests (2025)
+        name: CaptureWindowsDigests2025
+        inputs:
+          azureSubscription: $(AZURE_SERVICE_CONNECTION)
+          scriptType: pscore
+          scriptLocation: inlineScript
+          failOnStandardError: false
+          inlineScript: |
+            $ErrorActionPreference='Stop'
+            $acrFqdn = "$(ACR_NAME)"; if(-not $acrFqdn){ Write-Error 'ACR_NAME empty'; exit 1 }
+            $acr = $acrFqdn.Split('.')[0]
+            $tag = '$(EFFECTIVE_TAG_SUFFIX)'
+            if(-not $tag){ Write-Warning 'No EFFECTIVE_TAG_SUFFIX provided; skipping digest capture.'; exit 0 }
+            $versions = "$(WINDOWS_VERSIONS)".Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+            New-Item -ItemType Directory -Force -Path $(Pipeline.Workspace)/manifests | Out-Null
+            foreach($v in $versions){
+              $repo = "windows-sh-agent-$v"
+              Write-Host ("Collecting digest for {0}:{1}" -f $repo,$tag)
+              $digest = $null
+              $detected = "$(DETECTED_ACR_CMD)"
+              if([string]::IsNullOrWhiteSpace($detected)){
+                Write-Host 'No detected ACR_DIGEST_COMMAND from Preflight; using default show-manifests --repository'
+                $detected = "az acr repository show-manifests --name $acr --repository $repo --output json"
+              }
+              $jmes2 = "[?tags[?@=='{0}']].digest" -f $tag
+              $cmd = $detected.Replace('<acr>',$acr).Replace('<repo>',$repo)
+              if(-not ($cmd -match '--query')){ $cmd = "$cmd --query `"$jmes2`" -o tsv" }
+              $digest = bash -lc "$cmd" 2>&1 | Select-Object -First 1
+              if(-not $digest){
+                Write-Warning ("Digest not found for {0}:{1}" -f $repo,$tag)
+                $digestOut = ''
+              } else {
+                Write-Host ("Digest for {0}:{1} -> {2}" -f $repo,$tag,$digest)
+                $digestOut = $digest
+              }
+              ("{0}:{1}={2}" -f $repo,$tag,$digestOut) | Out-File $(Pipeline.Workspace)/manifests/windows-$v-digest.txt -Encoding utf8
+            }
+            Write-Host 'Windows digests collection complete.'
+
+  - job: Summary
+    displayName: Summary & Verification
+    dependsOn:
+      [
+        Versioning,
+        Preflight,
+        LinuxAgentImage,
+        WindowsAgentImage_2019,
+        WindowsAgentImage_2022,
+        WindowsAgentImage_2025,
+      ]
+    condition: succeededOrFailed()
+    pool:
+      ${{ if parameters.useOnPremAgents }}:
+        name: UbuntuLatestPoolOnPrem
+      ${{ else }}:
+        vmImage: ubuntu-latest
+    variables:
+      EFFECTIVE_TAG_SUFFIX: $[ dependencies.Versioning.outputs['SetSemVer.SEMVER_EFFECTIVE'] ]
+      SEMVER_MODE: $[ dependencies.Versioning.outputs['SetSemVer.SEMVER_MODE'] ]
+    steps:
+      - task: AzureCLI@2
+        displayName: Show image tags & digests
+        inputs:
+          azureSubscription: $(AZURE_SERVICE_CONNECTION)
+          scriptType: pscore
+          scriptLocation: inlineScript
+          failOnStandardError: false
+          inlineScript: |
+            $ErrorActionPreference = 'Stop'
+            $acrFqdn = "$(ACR_NAME)"; if(-not $acrFqdn){ Write-Error 'ACR_NAME variable empty'; exit 1 }
+            $acr = $acrFqdn.Split('.')[0]
+            Write-Host "ACR: $acrFqdn"
+            Write-Host "Effective tag suffix: $(EFFECTIVE_TAG_SUFFIX)"
+            Write-Host "Semantic version mode: $(SEMVER_MODE)"
+            $skipLinux = [System.Convert]::ToBoolean('${{ parameters.skipLinux }}')
+            $skipWindows = [System.Convert]::ToBoolean('${{ parameters.skipWindows }}')
+            function Invoke-AzSafe($label, [scriptblock]$block){ Write-Host "--- $label ---"; try { & $block } catch { Write-Warning "$label failed: $($_.Exception.Message)" } }
+            Invoke-AzSafe 'Repository list' { az acr repository list --name $acr --output table }
+            if(-not $skipLinux){ Invoke-AzSafe 'Linux tags (latest 20)' { az acr repository show-tags --name $acr --repository $(LINUX_REPOSITORY_NAME) --top 20 --orderby time_desc --output table } }
+            if(-not $skipWindows){
+              $winVersions = "$(WINDOWS_VERSIONS)".Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+              foreach($v in $winVersions){ Invoke-AzSafe "Windows $v tags (latest 10)" { az acr repository show-tags --name $acr --repository "windows-sh-agent-$v" --top 10 --orderby time_desc --output table } }
+            }
+            if(Test-Path $(Pipeline.Workspace)/manifests){
+              Write-Host '--- Image Digests ---'
+              Get-ChildItem $(Pipeline.Workspace)/manifests | ForEach-Object { "$( $_.Name): $(Get-Content $_)" } | Write-Host
+            } else { Write-Host 'No manifest directory found.' }
+      - pwsh: |
+          $manifests = Test-Path "$(Pipeline.Workspace)/manifests"
+          $sbom = Test-Path "$(Pipeline.Workspace)/sbom"
+          Write-Host "Manifests directory present: $manifests"
+          Write-Host "SBOM directory present: $sbom"
+          $manifestsStr = $manifests.ToString().ToLower()
+          $sbomStr = $sbom.ToString().ToLower()
+          Write-Host "##vso[task.setvariable variable=HAS_MANIFESTS]$manifestsStr"
+          Write-Host "##vso[task.setvariable variable=HAS_SBOM]$sbomStr"
+        displayName: Detect artifact directories
+      - pwsh: |
+          $generateSbom = [System.Convert]::ToBoolean('${{ parameters.generateSbom }}')
+          if(-not $generateSbom){ Write-Host 'SBOM generation skipped.'; exit 0 }
+          New-Item -ItemType Directory -Force -Path $(Pipeline.Workspace)/sbom | Out-Null
+          $content = @(
+            'SBOM Placeholder',
+            "Generated: $(Get-Date -Format o)",
+            "Effective Tag Suffix: $(EFFECTIVE_TAG_SUFFIX)",
+            "Mode: $(SEMVER_MODE)",
+            'Images:'
+          )
+          if(Test-Path $(Pipeline.Workspace)/manifests){ $content += Get-Content $(Pipeline.Workspace)/manifests/* }
+          $content | Out-File $(Pipeline.Workspace)/sbom/sbom.txt -Encoding utf8
+          Write-Host 'SBOM placeholder created.'
+        displayName: Generate SBOM placeholder
+        condition: eq(${{ parameters.generateSbom }}, true)
+      - task: AzureCLI@2
+        displayName: Verify effective tag exists (Linux repo)
+        condition: and(succeededOrFailed(), eq(${{ parameters.skipLinux }}, false))
+        inputs:
+          azureSubscription: $(AZURE_SERVICE_CONNECTION)
+          scriptType: pscore
+          scriptLocation: inlineScript
+          failOnStandardError: false
+          inlineScript: |
+            $ErrorActionPreference='Stop'
+            $acrFqdn = "$(ACR_NAME)"; $acr=$acrFqdn.Split('.')[0]
+            $repo = "$(LINUX_REPOSITORY_NAME)"
+            $tag = "$(EFFECTIVE_TAG_SUFFIX)"
+            Write-Host "Verifying tag '$tag' exists in $repo"
+            $tags = az acr repository show-tags --name $acr --repository $repo --top 150 --orderby time_desc -o tsv
+            if($tags -notcontains $tag){ Write-Error "Tag $tag not found in $repo" } else { Write-Host 'Tag found.' }
+      - task: AzureCLI@2
+        displayName: Verify effective tag exists (Windows repos)
+        condition: and(succeededOrFailed(), eq(${{ parameters.skipWindows }}, false))
+        inputs:
+          azureSubscription: $(AZURE_SERVICE_CONNECTION)
+          scriptType: pscore
+          scriptLocation: inlineScript
+          failOnStandardError: false
+          inlineScript: |
+            $ErrorActionPreference='Stop'
+            $acrFqdn = "$(ACR_NAME)"; $acr=$acrFqdn.Split('.')[0]
+            $tag = "$(EFFECTIVE_TAG_SUFFIX)"
+            $versions = "$(WINDOWS_VERSIONS)".Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+            foreach($v in $versions){
+              $repo = "windows-sh-agent-$v"
+              Write-Host "Verifying tag '$tag' exists in $repo"
+              $tags = az acr repository show-tags --name $acr --repository $repo --top 200 --orderby time_desc -o tsv
+              if($tags -notcontains $tag){ Write-Error "Tag $tag not found in $repo" } else { Write-Host "Tag found in $repo." }
+            }
+      - task: AzureCLI@2
+        displayName: Generate tags.json inventory
+        inputs:
+          azureSubscription: $(AZURE_SERVICE_CONNECTION)
+          scriptType: pscore
+          scriptLocation: inlineScript
+          failOnStandardError: false
+          inlineScript: |
+            $ErrorActionPreference='Stop'
+            $acrFqdn = "$(ACR_NAME)"; $acr=$acrFqdn.Split('.')[0]
+            $tag = "$(EFFECTIVE_TAG_SUFFIX)"
+            $mode = "$(SEMVER_MODE)"
+            $skipLinux = [System.Convert]::ToBoolean('${{ parameters.skipLinux }}')
+            $skipWindows = [System.Convert]::ToBoolean('${{ parameters.skipWindows }}')
+            New-Item -ItemType Directory -Force -Path $(Pipeline.Workspace)/tags | Out-Null
+            $obj = [ordered]@{
+              effectiveTagSuffix = $tag
+              generated = (Get-Date -Format o)
+              mode = $mode
+              linux = $null
+              windows = @{}
+            }
+            if(-not $skipLinux){
+              $linuxRepo = "$(LINUX_REPOSITORY_NAME)"
+              $linuxTags = az acr repository show-tags --name $acr --repository $linuxRepo --top 200 --orderby time_desc -o tsv
+              $obj.linux = [ordered]@{ repository = $linuxRepo; tags = $linuxTags }
+            }
+            if(-not $skipWindows){
+              $versions = "$(WINDOWS_VERSIONS)".Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+              foreach($v in $versions){
+                $repo = "windows-sh-agent-$v"
+                $winTags = az acr repository show-tags --name $acr --repository $repo --top 200 --orderby time_desc -o tsv
+                $obj.windows[$repo] = $winTags
+              }
+            }
+            ($obj | ConvertTo-Json -Depth 6) | Out-File $(Pipeline.Workspace)/tags/tags.json -Encoding utf8
+            Write-Host 'tags.json created.'
+            Write-Host "##vso[task.setvariable variable=HAS_TAGS_JSON]true"
+      - task: PublishBuildArtifacts@1
+        displayName: Publish tag inventory
+        condition: and(succeededOrFailed(), eq(variables['HAS_TAGS_JSON'],'true'))
+        inputs:
+          PathtoPublish: $(Pipeline.Workspace)/tags
+          ArtifactName: tags
+      - pwsh: |
+          $has = Test-Path "$(Pipeline.Workspace)/manifests"
+          if(-not $has){ Write-Host 'No manifests directory present; skipping publish.'; exit 0 }
+          $files = Get-ChildItem "$(Pipeline.Workspace)/manifests" -File | Select-Object -Expand Name
+          Write-Host "Found manifest files: $($files -join ', ')"
+          # Ensure at least one manifest exists before publishing
+          if($files.Count -eq 0){ Write-Host 'No manifest files found; skipping publish.'; exit 0 }
+        displayName: Inspect manifests
+      - task: PublishBuildArtifacts@1
+        displayName: Publish manifests
+        condition: and(succeededOrFailed(), eq(variables['HAS_MANIFESTS'],'true'))
+        inputs:
+          PathtoPublish: $(Pipeline.Workspace)/manifests
+          ArtifactName: image-manifests
+      - task: PublishBuildArtifacts@1
+        displayName: Publish SBOM
+        condition: and(succeededOrFailed(), eq(${{ parameters.generateSbom }}, true), eq(variables['HAS_SBOM'],'True'))
+        inputs:
+          PathtoPublish: $(Pipeline.Workspace)/sbom
+          ArtifactName: sbom
+      - task: PublishBuildArtifacts@1
+        displayName: Publish pipeline workspace (debug dump)
+        condition: succeededOrFailed()
+        inputs:
+          PathtoPublish: $(Pipeline.Workspace)
+          ArtifactName: pipeline-workspace-dump

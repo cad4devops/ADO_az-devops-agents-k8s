@@ -1,0 +1,54 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: instanceNumber
+    type: string
+    default: "__INSTANCE_NUMBER__"
+  - name: os
+    type: string
+    default: "linux"
+    values:
+      - linux
+      - windows
+  - name: stageName
+    type: string
+    default: "DeployInParallel"
+  - name: stageDisplayName
+    type: string
+    default: "Deploy in Parallel"
+  - name: helloWaitSeconds
+    type: number
+    default: 180
+  - name: useAzureLocal
+    type: boolean
+    default: false
+
+stages:
+  - stage: ${{ parameters.stageName }}
+    displayName: ${{ parameters.stageDisplayName }}
+    jobs:
+      - job: RunParallelTests
+        displayName: "Run parallel tests on selected pool"
+        pool:
+          ${{ if and(eq(parameters.os, 'linux'), parameters.useAzureLocal) }}:
+            name: KubernetesPoolOnPremLinux${{ parameters.instanceNumber }}
+          ${{ if and(eq(parameters.os, 'linux'), not(parameters.useAzureLocal)) }}:
+            name: KubernetesPoolLinux${{ parameters.instanceNumber }}
+          ${{ if and(eq(parameters.os, 'windows'), parameters.useAzureLocal) }}:
+            name: KubernetesPoolOnPremWindows${{ parameters.instanceNumber }}
+          ${{ if and(eq(parameters.os, 'windows'), not(parameters.useAzureLocal)) }}:
+            name: KubernetesPoolWindows${{ parameters.instanceNumber }}
+        strategy:
+          parallel: 5
+        steps:
+          - checkout: self
+            persistCredentials: true
+          - ${{ if eq(parameters.os, 'linux') }}:
+              - template: ../scripts/kubernetes/linux/hello-world.yml
+                parameters:
+                  helloWaitSeconds: ${{ parameters.helloWaitSeconds }}
+          - ${{ if eq(parameters.os, 'windows') }}:
+              - template: ../scripts/kubernetes/windows/hello-world.yml
+                parameters:
+                  helloWaitSeconds: ${{ parameters.helloWaitSeconds }}

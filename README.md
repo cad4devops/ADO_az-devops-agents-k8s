@@ -20,6 +20,7 @@ Run scalable, secure, cost‑efficient Azure DevOps (ADO) self‑hosted agents o
 1. [Why Kubernetes for ADO Agents?](#why-kubernetes)  
 2. [Architecture Overview](#architecture)  
 3. [Repository Structure](#repository-structure)  
+2.1 [Bootstrap & Build Orchestrator](#bootstrap-and-build)
 4. [Images & Variants](#images--variants)  
 5. [Helm Chart](#helm-chart)  
 6. [Configuration (values.yaml)](#configuration)  
@@ -50,6 +51,12 @@ Kubernetes + containers give you:
 * Unified management (Helm + GitOps).  
 * Support for mixed OS pools (Windows + Linux).  
 * Customization: Add tooling in Dockerfiles per workload (e.g., Node, .NET, Java, Docker CLI, etc.).  
+
+---
+
+## Bootstrap & Build Orchestrator <a id="bootstrap-and-build"></a>
+
+This repository now includes a single-entry orchestrator script `bootstrap-and-build.ps1` that performs an end-to-end onboarding flow: deploy infra (Bicep), build & push agent images, render pipeline templates, and provision Azure DevOps resources (variable group, secure file, and required pipelines). See `docs/bootstrap-and-build.md` for full usage and examples.
 
 ---
 
@@ -213,6 +220,16 @@ pwsh ./01-build-and-push.ps1 -ImageTag 2025-09-20 -Registry yourrepo
 ```powershell
 ```
 
+### Getting started (bootstrap)
+
+For a single-command onboarding that deploys infra (Bicep), builds images, renders pipeline YAML and provisions Azure DevOps resources, run the orchestrator:
+
+```powershell
+pwsh -NoProfile -File .\bootstrap-and-build.ps1 -InstanceNumber 003 -Location canadacentral -ContainerRegistryName <your-acr-shortname>
+```
+
+See `docs/bootstrap-and-build.md` and `docs/bootstrap-env.md` for required environment variables and PAT scope recommendations.
+
 ### 2. Prepare values file
 ```
 cp helm-charts/az-selfhosted-agents/values.yaml my-values.yaml
@@ -323,7 +340,7 @@ Please open issues for bugs, feature requests, or clarifications.
 ---
 
 ## Weekly Pipeline <a id="weekly-pipeline"></a>
-Automated weekly rebuild & tagging of Linux and Windows self-hosted agent images is performed by an Azure DevOps pipeline (`.azuredevops/pipelines/weekly-agent-images-refresh.yaml`).
+Automated weekly rebuild & tagging of Linux and Windows self-hosted agent images is performed by an Azure DevOps pipeline (`.azuredevops/pipelines/weekly-agent-images-refresh.yml`).
 
 Highlights:
 - Scheduled (cron) only – no CI trigger noise.
@@ -365,7 +382,7 @@ This repository includes several key Azure DevOps pipeline YAML files used to de
   * Docs: `docs/run-on-selfhosted-pool-sample.md` — Minimal sample pipeline to exercise agents.
 * Uninstall self‑hosted agents: `.azuredevops/pipelines/uninstall-selfhosted-agents.yml`
   * Docs: `docs/uninstall-selfhosted-agents.md` — Cleanup pipeline for helm releases, secrets, and optional registry cleanup.
-* Weekly agent images refresh: `.azuredevops/pipelines/weekly-agent-images-refresh.yaml`
+* Weekly agent images refresh: `.azuredevops/pipelines/weekly-agent-images-refresh.yml`
   * Docs: `docs/weekly-agent-pipeline.md` — Scheduled weekly rebuild/push plus digest capture and artifacts.
 
 ---

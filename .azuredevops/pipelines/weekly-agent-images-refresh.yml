@@ -29,14 +29,11 @@ parameters:
     default: "DOS_DevOpsShield_Prod"
     values:
       - "DOS_DevOpsShield_Prod"
-      - "ADO_SvcConnRgScopedProd"
   - name: ACR_NAME
     type: string
     default: "cragents003c66i4n7btfksg"
     values:
       - "cragents003c66i4n7btfksg"
-      #- 'cragentssgvhe4aipy37o'
-  # legacy registry removed: 'cragentssgvhe4aipy37o'
   - name: skipLinux
     type: boolean
     default: false
@@ -303,6 +300,7 @@ jobs:
           scriptType: pscore
           scriptLocation: scriptPath
           scriptPath: azsh-linux-agent/01-build-and-push.ps1
+          arguments: -DefaultAcr $(ACR_NAME)
           workingDirectory: azsh-linux-agent
           failOnStandardError: false
         env:
@@ -378,7 +376,7 @@ jobs:
           scriptType: pscore
           scriptLocation: scriptPath
           scriptPath: azsh-windows-agent/01-build-and-push.ps1
-          arguments: -WindowsVersions $(WIN_VERSION)
+          arguments: -DefaultAcr $(ACR_NAME) -WindowsVersions $(WIN_VERSION)
           workingDirectory: azsh-windows-agent
           failOnStandardError: false
         env:
@@ -386,6 +384,7 @@ jobs:
           TAG_SUFFIX: $(EFFECTIVE_TAG_SUFFIX)
           SEMVER_EFFECTIVE: $(EFFECTIVE_TAG_SUFFIX)
           WINDOWS_VERSIONS: $(WIN_VERSION)
+          WIN_VERSION: $(WIN_VERSION)
       - publish: azsh-windows-agent
         artifact: windows-build-context-2019
         condition: succeededOrFailed()
@@ -449,6 +448,7 @@ jobs:
           Write-Host "[WindowsAgentImage 2022] EFFECTIVE_TAG_SUFFIX=$env:EFFECTIVE_TAG_SUFFIX"
           if(-not $env:EFFECTIVE_TAG_SUFFIX){ Write-Warning 'EFFECTIVE_TAG_SUFFIX is empty - semantic tag will not be added.' }
         displayName: Debug tag suffix (Windows 2022)
+      # ...existing Windows build task above kept; duplicate block removed
       - task: AzureCLI@2
         name: BuildWindows2022
         displayName: Run Windows build script (2022)
@@ -457,7 +457,7 @@ jobs:
           scriptType: pscore
           scriptLocation: scriptPath
           scriptPath: azsh-windows-agent/01-build-and-push.ps1
-          arguments: -WindowsVersions $(WIN_VERSION)
+          arguments: -DefaultAcr $(ACR_NAME) -WindowsVersions $(WIN_VERSION)
           workingDirectory: azsh-windows-agent
           failOnStandardError: false
         env:
@@ -465,6 +465,7 @@ jobs:
           TAG_SUFFIX: $(EFFECTIVE_TAG_SUFFIX)
           SEMVER_EFFECTIVE: $(EFFECTIVE_TAG_SUFFIX)
           WINDOWS_VERSIONS: $(WIN_VERSION)
+          WIN_VERSION: $(WIN_VERSION)
       - publish: azsh-windows-agent
         artifact: windows-build-context-2022
         condition: succeededOrFailed()
@@ -482,30 +483,30 @@ jobs:
             $acr = $acrFqdn.Split('.')[0]
             $tag = '$(EFFECTIVE_TAG_SUFFIX)'
             if(-not $tag){ Write-Warning 'No EFFECTIVE_TAG_SUFFIX provided; skipping digest capture.'; exit 0 }
-            $versions = "$(WINDOWS_VERSIONS)".Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+            # Only collect digest for this job's Windows version
+            $win = "$(WIN_VERSION)".Trim()
+            if(-not $win){ Write-Warning 'WIN_VERSION not set for this job; skipping.'; exit 0 }
+            $repo = "windows-sh-agent-$win"
             New-Item -ItemType Directory -Force -Path $(Pipeline.Workspace)/manifests | Out-Null
-            foreach($v in $versions){
-              $repo = "windows-sh-agent-$v"
-              Write-Host ("Collecting digest for {0}:{1}" -f $repo,$tag)
-              $digest = $null
-              $detected = "$(DETECTED_ACR_CMD)"
-              if([string]::IsNullOrWhiteSpace($detected)){
-                Write-Host 'No detected ACR_DIGEST_COMMAND from Preflight; using default show-manifests --repository'
-                $detected = "az acr repository show-manifests --name $acr --repository $repo --output json"
-              }
-              $jmes2 = "[?tags[?@=='{0}']].digest" -f $tag
-              $cmd = $detected.Replace('<acr>',$acr).Replace('<repo>',$repo)
-              if(-not ($cmd -match '--query')){ $cmd = "$cmd --query `"$jmes2`" -o tsv" }
-              $digest = bash -lc "$cmd" 2>&1 | Select-Object -First 1
-              if(-not $digest){
-                Write-Warning ("Digest not found for {0}:{1}" -f $repo,$tag)
-                $digestOut = ''
-              } else {
-                Write-Host ("Digest for {0}:{1} -> {2}" -f $repo,$tag,$digest)
-                $digestOut = $digest
-              }
-              ("{0}:{1}={2}" -f $repo,$tag,$digestOut) | Out-File $(Pipeline.Workspace)/manifests/windows-$v-digest.txt -Encoding utf8
+            Write-Host ("Collecting digest for {0}:{1}" -f $repo,$tag)
+            $digest = $null
+            $detected = "$(DETECTED_ACR_CMD)"
+            if([string]::IsNullOrWhiteSpace($detected)){
+              Write-Host 'No detected ACR_DIGEST_COMMAND from Preflight; using default show-manifests --repository'
+              $detected = "az acr repository show-manifests --name $acr --repository $repo --output json"
             }
+            $jmes2 = "[?tags[?@=='{0}']].digest" -f $tag
+            $cmd = $detected.Replace('<acr>',$acr).Replace('<repo>',$repo)
+            if(-not ($cmd -match '--query')){ $cmd = "$cmd --query `"$jmes2`" -o tsv" }
+            $digest = bash -lc "$cmd" 2>&1 | Select-Object -First 1
+            if(-not $digest){
+              Write-Warning ("Digest not found for {0}:{1}" -f $repo,$tag)
+              $digestOut = ''
+            } else {
+              Write-Host ("Digest for {0}:{1} -> {2}" -f $repo,$tag,$digest)
+              $digestOut = $digest
+            }
+            ("{0}:{1}={2}" -f $repo,$tag,$digestOut) | Out-File $(Pipeline.Workspace)/manifests/windows-$win-digest.txt -Encoding utf8
             Write-Host 'Windows digests collection complete.'
 
   - job: WindowsAgentImage_2025
@@ -536,7 +537,7 @@ jobs:
           scriptType: pscore
           scriptLocation: scriptPath
           scriptPath: azsh-windows-agent/01-build-and-push.ps1
-          arguments: -WindowsVersions $(WIN_VERSION)
+          arguments: -DefaultAcr $(ACR_NAME) -WindowsVersions $(WIN_VERSION)
           workingDirectory: azsh-windows-agent
           failOnStandardError: false
         env:
@@ -544,6 +545,8 @@ jobs:
           TAG_SUFFIX: $(EFFECTIVE_TAG_SUFFIX)
           SEMVER_EFFECTIVE: $(EFFECTIVE_TAG_SUFFIX)
           WINDOWS_VERSIONS: $(WIN_VERSION)
+          WIN_VERSION: $(WIN_VERSION)
+      # ...existing Windows build task above kept; duplicate block removed
       - publish: azsh-windows-agent
         artifact: windows-build-context-2025
         condition: succeededOrFailed()
@@ -766,3 +769,4 @@ jobs:
         inputs:
           PathtoPublish: $(Pipeline.Workspace)
           ArtifactName: pipeline-workspace-dump
+

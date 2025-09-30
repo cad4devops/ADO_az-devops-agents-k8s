@@ -1,25 +1,40 @@
+[CmdletBinding()]
 param(
+    [Parameter(Mandatory = $false)]
     [string]$ContainerRegistryName = $env:ACR_NAME,
+    [Parameter(Mandatory = $false)]
     [string]$RepositoryName = $env:LINUX_REPOSITORY_NAME,
+    [Parameter(Mandatory = $false)]
     [string]$BaseTag = $env:LINUX_BASE_TAG,
+    [Parameter(Mandatory = $false)]
     [string]$TagSuffix = $env:TAG_SUFFIX,
+    [Parameter(Mandatory = $false)]
     [string]$SemVer = $env:SEMVER_EFFECTIVE,
+    [Parameter(Mandatory = $false)]
     [switch]$DisableLatest,
     # Default ACR short name (no .azurecr.io). Can be overridden by passing this parameter
     # or by setting the DEFAULT_ACR environment variable in CI.
-    [string]$DefaultAcr = 'cragents003c66i4n7btfksg'
+    [Parameter(Mandatory = $true)]
+    [string]$DefaultAcr #'cragents003c66i4n7btfksg'
 )
 
 $ErrorActionPreference = 'Stop'
+
+# Cross-platform green output helper for CI logs
+function Write-Green([string]$msg) {
+    try { if ($IsWindows) { Write-Host -ForegroundColor Green $msg } else { Write-Host "`e[32m$msg`e[0m" } } catch { Write-Host $msg }
+}
 
 if (-not $ContainerRegistryName) {
     # Prefer an explicit DefaultAcr parameter, then DEFAULT_ACR env var, then built-in fallback
     if ($DefaultAcr) {
         $ContainerRegistryName = $DefaultAcr
-    } elseif ($env:DEFAULT_ACR) {
+    }
+    elseif ($env:DEFAULT_ACR) {
         $ContainerRegistryName = $env:DEFAULT_ACR
-    } else {
-        $ContainerRegistryName = 'cragents003c66i4n7btfksg'
+    }
+    else {
+        $ContainerRegistryName = $DefaultAcr #'cragents003c66i4n7btfksg'
     }
 }
 # If user supplied an unqualified registry name (no dot), assume Azure Container Registry and append the azurecr.io suffix
@@ -48,9 +63,9 @@ $tags = @(
 )
 
 # If SemVer looks like Major.Minor.Patch and isn't already identical to FinalTag, add an extra semantic tag
-if($SemVer -and $SemVer -match '^[0-9]+\.[0-9]+\.[0-9]+$'){
+if ($SemVer -and $SemVer -match '^[0-9]+\.[0-9]+\.[0-9]+$') {
     $semverRepoTag = "${ContainerRegistryName}/${RepositoryName}:$SemVer"
-    if($FinalTag -ne $SemVer -and ($tags -notcontains $semverRepoTag)){
+    if ($FinalTag -ne $SemVer -and ($tags -notcontains $semverRepoTag)) {
         Write-Host "Adding semantic version tag: $SemVer"
         $tags += $semverRepoTag
     }
@@ -58,7 +73,7 @@ if($SemVer -and $SemVer -match '^[0-9]+\.[0-9]+\.[0-9]+$'){
 if (-not $DisableLatest) { $tags += "${ContainerRegistryName}/${RepositoryName}:latest" }
 
 $tagParams = @()
-foreach($t in $tags){ $tagParams += @('--tag', $t) }
+foreach ($t in $tags) { $tagParams += @('--tag', $t) }
 
 Write-Host "Running docker build with tags:`n  $($tags -join "`n  ")"
 docker build @tagParams --file "$dockerFileName" .
@@ -68,7 +83,7 @@ Write-Host "Logging into ACR: $acrShort"
 az acr login --name $acrShort | Out-Null
 
 $pushFailures = @()
-foreach($t in $tags | Where-Object { $_ -like "$ContainerRegistryName*" }){
+foreach ($t in $tags | Where-Object { $_ -like "$ContainerRegistryName*" }) {
     Write-Host "Pushing $t"
     docker push $t 2>&1 | ForEach-Object { Write-Host $_ }
     if ($LASTEXITCODE -ne 0) {
@@ -82,9 +97,11 @@ if ($pushFailures.Count -gt 0) {
     $allTags = ($tags | Where-Object { $_ -like "$ContainerRegistryName*" })
     if ($pushFailures.Count -eq $allTags.Count) {
         Write-Error "All pushes failed for $RepositoryName"
-    } else {
-    Write-Host ("Completed push (partial success) {0}:{1}" -f $RepositoryName,$FinalTag) -ForegroundColor Yellow
     }
-} else {
-    Write-Host ("Completed push for {0}:{1}" -f $RepositoryName,$FinalTag) -ForegroundColor Green
+    else {
+        Write-Host ("Completed push (partial success) {0}:{1}" -f $RepositoryName, $FinalTag) -ForegroundColor Yellow
+    }
+}
+else {
+    Write-Green ("Completed push for {0}:{1}" -f $RepositoryName, $FinalTag)
 }

@@ -1,6 +1,6 @@
 # Weekly Agent Images Refresh Pipeline
 
-This document describes the Azure DevOps pipeline defined in `.azuredevops/pipelines/weekly-agent-images-refresh.yaml` which performs a scheduled (weekly) rebuild & push of the Linux and Windows self‑hosted Azure DevOps agent images.
+This document describes the Azure DevOps pipeline defined in `.azuredevops/pipelines/weekly-agent-images-refresh.yml` which performs a scheduled (weekly) rebuild & push of the Linux and Windows self‑hosted Azure DevOps agent images.
 
 ## Goals
 

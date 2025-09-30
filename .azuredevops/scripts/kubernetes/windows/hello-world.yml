@@ -1,0 +1,27 @@
+parameters:
+  - name: helloWaitSeconds
+    type: number
+    default: 180
+
+steps:
+  - task: CmdLine@2
+    displayName: "Run Hello World"
+    inputs:
+      script: |
+        echo "Hello World"
+        echo "OS Version:"
+        ver
+        echo "System Information:"
+        systeminfo
+        echo "Hostname:"
+        hostname
+  # powershell task to wait 300 seconds
+  # powershell task to wait configurable seconds (default 180)
+  - task: PowerShell@2
+    displayName: "Wait ${{ parameters.helloWaitSeconds }} seconds (hello-world)"
+    inputs:
+      targetType: "inline"
+      script: |
+        # Use the templated numeric parameter directly; it will be expanded into the script.
+        $secs = ${{ parameters.helloWaitSeconds }}
+        Start-Sleep -Seconds $secs

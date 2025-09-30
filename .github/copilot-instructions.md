@@ -6,7 +6,7 @@ This file documents the repository layout, developer/automation workflows, and t
 
 Quick links
 -----------
-- Pipeline: `.azuredevops/pipelines/weekly-agent-images-refresh.yaml`
+- Pipeline: `.azuredevops/pipelines/weekly-agent-images-refresh.yml`
 - Linux build script: `azsh-linux-agent/01-build-and-push.ps1`
 - Windows build script: `azsh-windows-agent/01-build-and-push.ps1`
 - Windows Dockerfiles: `azsh-windows-agent/Dockerfile.windows-sh-agent-*-windows*`
@@ -70,7 +70,7 @@ Known issues and how they were addressed
 
 Pipeline notes
 --------------
-- File: `.azuredevops/pipelines/weekly-agent-images-refresh.yaml`
+- File: `.azuredevops/pipelines/weekly-agent-images-refresh.yml`
   - Scheduled weekly rebuild of Linux and Windows agent images.
   - Versioning job uses GitVersion (or fallback) to produce `SEMVER_EFFECTIVE`.
   - Preflight job validates ACR and detects a working ACR manifest list command; it deliberately does not fail on non-critical probe exits.

@@ -2,8 +2,9 @@
 
 This folder contains user and operator documentation for deploying, validating, and maintaining Azure DevOps self‑hosted agents on Kubernetes.
 
-Top-level docs
+- Top-level docs
 
+- `bootstrap-and-build.md` — Orchestrator to deploy infra, build images, and provision Azure DevOps (variable group, secure file, pipelines).
 - `deploy-selfhosted-agents.md` — Helm deployment pipeline and guidance.
 - `validate-selfhosted-agents.md` — Pipeline to validate agent registration and sample job runs.
 - `run-on-selfhosted-pool-sample.md` — Minimal sample pipeline showing how to target the self‑hosted pool.

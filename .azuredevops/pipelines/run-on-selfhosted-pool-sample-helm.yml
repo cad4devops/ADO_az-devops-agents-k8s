@@ -45,10 +45,11 @@ stages:
           - checkout: self
             persistCredentials: true
           - ${{ if eq(parameters.os, 'linux') }}:
-              - template: ../scripts/kubernetes/linux/hello-world.yaml
+              - template: ../scripts/kubernetes/linux/hello-world.yml
                 parameters:
                   helloWaitSeconds: ${{ parameters.helloWaitSeconds }}
           - ${{ if eq(parameters.os, 'windows') }}:
-              - template: ../scripts/kubernetes/windows/hello-world.yaml
+              - template: ../scripts/kubernetes/windows/hello-world.yml
                 parameters:
                   helloWaitSeconds: ${{ parameters.helloWaitSeconds }}
+
