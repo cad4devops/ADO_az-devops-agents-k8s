@@ -60,12 +60,24 @@ parameters:
   - name: kubeConfigSecretFile
     type: string
     default: "__KUBECONFIG_SECRET_FILE__"
+  - name: windowsNodeTaintKey
+    type: string
+    default: "sku"
+    displayName: "Windows node taint key to require (default: 'sku' to match Helm chart toleration)"
+  - name: windowsNodeTaintEffect
+    type: string
+    default: "NoSchedule"
+    displayName: "Taint effect to require on Windows nodes (default: NoSchedule)"
+  - name: windowsNodeTaintValue
+    type: string
+    default: "Windows"
+    displayName: "Taint value to require on Windows nodes (default: 'Windows' to match Helm chart)"
   - name: useOnPremAgents
     type: boolean
     default: true # Set to true to use on-premises agents, false to use cloud agents
 
 variables:
-  - group: __AZURE_DEVOPS_VARIABLE_GROUP__ # to get AZDO_PAT
+  - group: "__AZURE_DEVOPS_VARIABLE_GROUP__" # to get AZDO_PAT
   - name: azureSubscription
     value: ${{ parameters.AZURE_SERVICE_CONNECTION }}
 
@@ -215,6 +227,219 @@ stages:
                   Write-Host "Downloaded kubectl to $kubectlPath and prepended AGENT_TEMPDIRECTORY to PATH"
                 } else { Write-Host "kubectl found at $($kubectlCmd.Path)" }
 
+          - ${{ if eq(parameters.deployWindows, true) }}:
+              - task: PowerShell@2
+                displayName: Verify Windows nodes and NoSchedule taints
+                inputs:
+                  targetType: inline
+                  pwsh: true
+                  script: |
+                    Set-StrictMode -Version Latest
+                    $ErrorActionPreference = 'Stop'
+                    # Ensure KUBECONFIG is present
+                    if (-not $env:KUBECONFIG -or -not (Test-Path $env:KUBECONFIG)) {
+                      Write-Error "KUBECONFIG not set or not found at '$env:KUBECONFIG'. Cannot query cluster to verify Windows nodes."
+                      exit 1
+                    }
+                    Write-Host "Querying cluster for nodes using KUBECONFIG=$env:KUBECONFIG"
+                    # Run repository helper to dump taints for debugging/visibility
+                    $repoRoot = "$(System.DefaultWorkingDirectory)"
+                    $getTaintsScript = Join-Path $repoRoot 'azsh-windows-agent\Get-Taints.ps1'
+                    if (Test-Path $getTaintsScript) {
+                      Write-Host "Running helper: $getTaintsScript"
+                      try { pwsh -NoProfile -NonInteractive -File $getTaintsScript } catch { Write-Warning ("Get-Taints helper failed: {0}" -f $_.Exception.Message) }
+                    }
+
+                    $nodesJson = kubectl --kubeconfig $env:KUBECONFIG get nodes -o json 2>$null
+                    if (-not $nodesJson) { Write-Error 'Failed to list nodes from cluster (kubectl returned no output)'; exit 1 }
+                    $nodes = $nodesJson | ConvertFrom-Json
+                    $windowsNodes = @()
+                    foreach ($n in $nodes.items) {
+                      $osLabel = $n.metadata.labels.'kubernetes.io/os'
+                      if ($osLabel -and $osLabel -eq 'windows') { $windowsNodes += $n }
+                    }
+                    if (-not $windowsNodes -or $windowsNodes.Count -eq 0) {
+                      Write-Error 'No Windows nodes found in the cluster. Ensure Windows agent nodes are provisioned before enabling Windows deploy.'
+                      exit 1
+                    }
+                    Write-Host "Found $($windowsNodes.Count) Windows node(s): $(( $windowsNodes | ForEach-Object { $_.metadata.name } ) -join ', ')"
+                    # Verify each windows node has a taint matching the configured effect/key
+                    $taintKey = '${{ parameters.windowsNodeTaintKey }}'
+                    $taintEffect = '${{ parameters.windowsNodeTaintEffect }}'
+                    $taintValue = '${{ parameters.windowsNodeTaintValue }}'
+                    if (-not $taintValue) { $taintValue = 'Windows' }
+                    if (-not $taintEffect) { $taintEffect = 'NoSchedule' }
+                    # Verify each windows node has a taint with the requested effect (and key if provided)
+                    $missing = @()
+                    foreach ($n in $windowsNodes) {
+                      $name = $n.metadata.name
+                      $taints = $null
+                      try { $taints = $n.spec.taints } catch { $taints = $null }
+                      $hasNoSchedule = $false
+                      if ($taints) {
+                        foreach ($t in $taints) {
+                          # If a taint key and value are configured, require exact key+value+effect match (case-sensitive)
+                          if ($taintKey -and $taintValue) {
+                            if ($t.key -and $t.key -eq $taintKey -and $t.value -and $t.value -eq $taintValue -and $t.effect -and $t.effect -eq $taintEffect) { $hasNoSchedule = $true; break }
+                          }
+                          elseif ($taintKey -and -not $taintValue) {
+                            # key configured but no value required: accept key+effect
+                            if ($t.key -and $t.key -eq $taintKey -and $t.effect -and $t.effect -eq $taintEffect) { $hasNoSchedule = $true; break }
+                          }
+                          else {
+                            # No key required: accept any taint with the required effect
+                            if ($t.effect -and $t.effect -eq $taintEffect) { $hasNoSchedule = $true; break }
+                          }
+                        }
+                      }
+                      if (-not $hasNoSchedule) { $missing += $name }
+                    }
+                    if ($missing.Count -gt 0) {
+                      Write-Warning "The following Windows nodes are missing a taint with effect '$taintEffect' (and key '$taintKey' if configured): $($missing -join ', '). Attempting to add taints automatically..."
+                      # Attempt to add taints automatically and re-check
+                      foreach ($nodeName in $missing) {
+                        $tKey = $taintKey; if (-not $tKey) { $tKey = 'os' }
+                        $taintValue = '${{ parameters.windowsNodeTaintValue }}'
+                        if (-not $taintValue) { $taintValue = 'Windows' }
+                        $taintArg = "{0}={1}:{2}" -f $tKey, $taintValue, $taintEffect
+                        Write-Host ("Applying taint to {0}: {1}" -f $nodeName, $taintArg)
+                        try {
+                          kubectl --kubeconfig $env:KUBECONFIG taint nodes $nodeName $taintArg --overwrite
+                          Write-Host "Taint applied to $nodeName"
+                        }
+                        catch {
+                          Write-Warning ("Failed to apply taint to {0}: {1}" -f $nodeName, $_.Exception.Message)
+                        }
+                      }
+
+                      # Requery nodes and re-evaluate
+                      Write-Host 'Re-checking nodes after attempting to add taints...'
+                      $nodesJson2 = kubectl --kubeconfig $env:KUBECONFIG get nodes -o json 2>$null
+                      if (-not $nodesJson2) { Write-Error 'Failed to list nodes from cluster after taint attempt'; exit 1 }
+                      $nodes2 = $nodesJson2 | ConvertFrom-Json
+                      $windowsNodes2 = @()
+                      foreach ($n in $nodes2.items) { if ($n.metadata.labels.'kubernetes.io/os' -eq 'windows') { $windowsNodes2 += $n } }
+                      $missing2 = @()
+                      foreach ($n in $windowsNodes2) {
+                        $name = $n.metadata.name
+                        $taints = $null
+                        try { $taints = $n.spec.taints } catch { $taints = $null }
+                        $hasTaint = $false
+                        if ($taints) {
+                          foreach ($t in $taints) {
+                              if ($taintKey -and $taintValue) {
+                                if ($t.key -and $t.key -eq $taintKey -and $t.value -and $t.value -eq $taintValue -and $t.effect -and $t.effect -eq $taintEffect) { $hasTaint = $true; break }
+                              }
+                              elseif ($taintKey -and -not $taintValue) {
+                                if ($t.key -and $t.key -eq $taintKey -and $t.effect -and $t.effect -eq $taintEffect) { $hasTaint = $true; break }
+                              }
+                              else {
+                                if ($t.effect -and $t.effect -eq $taintEffect) { $hasTaint = $true; break }
+                              }
+                            }
+                        }
+                        if (-not $hasTaint) { $missing2 += $name }
+                      }
+                      if ($missing2.Count -gt 0) {
+                        $exampleKey = $taintKey; if (-not $exampleKey) { $exampleKey = 'os' }
+                        $exampleValue = '${{ parameters.windowsNodeTaintValue }}'
+                        if (-not $exampleValue) { $exampleValue = 'Windows' }
+                        Write-Error ("After attempting to add taints, the following Windows nodes still lack the required taint: {0}.\nPlease taint them (example): kubectl taint nodes <node-name> {1}={2}:{3}" -f ($missing2 -join ', '), $exampleKey, $exampleValue, $taintEffect)
+                        exit 1
+                      }
+                      else { Write-Host 'Taints applied (or already present) on all Windows nodes.' }
+                    }
+                    Write-Host 'Windows nodes verified and have NoSchedule taints.'
+
+          - ${{ if eq(parameters.useAzureLocal, true) }}:
+              - task: PowerShell@2
+                displayName: Create Docker regsecret in target namespaces (on-prem)
+                env:
+                  KUBECONFIG: $(KUBECONFIG)
+                  ACR_NAME: ${{ parameters.ACR_NAME }}
+                  ACR_USERNAME: $(ACR_USERNAME)
+                  ACR_PASSWORD: $(ACR_PASSWORD)
+                inputs:
+                  targetType: inline
+                  pwsh: true
+                  script: |
+                    Set-StrictMode -Version Latest
+                    $ErrorActionPreference = 'Stop'
+                    if (-not $env:KUBECONFIG -or -not (Test-Path $env:KUBECONFIG)) {
+                      Write-Host 'KUBECONFIG not set or missing; ensure DownloadSecureFile step ran and produced a kubeconfig'; exit 0
+                    }
+                    if (-not $env:ACR_USERNAME -or -not $env:ACR_PASSWORD) {
+                      Write-Error 'ACR credentials not provided (ACR_USERNAME/ACR_PASSWORD variables empty); required when useAzureLocal=true. Failing the job.'; exit 1
+                    }
+                    # Detect unresolved pipeline macro placeholders like '$(ACR_USERNAME)' which indicate
+                    # the pipeline variable wasn't set/expanded. Fail early to avoid creating a secret
+                    # containing the literal macro string.
+                    if ($env:ACR_USERNAME -and ($env:ACR_USERNAME -match '\$\(|\$\{')) {
+                      Write-Error "ACR_USERNAME appears to contain an unresolved pipeline macro ('$($env:ACR_USERNAME)'). Ensure ACR_USERNAME is defined as a pipeline variable (secret) when useAzureLocal=true."; exit 1
+                    }
+                    if ($env:ACR_PASSWORD -and ($env:ACR_PASSWORD -match '\$\(|\$\{')) {
+                      Write-Error "ACR_PASSWORD appears to contain an unresolved pipeline macro ('$([System.String]::Copy($env:ACR_PASSWORD))'). Ensure ACR_PASSWORD is defined as a pipeline variable (secret) when useAzureLocal=true."; exit 1
+                    }
+                    $instance = '${{ parameters.instanceNumber }}'
+                    # Respect pipeline parameters for platform selection
+                    $deployLinux = $false; try { $deployLinux = [System.Convert]::ToBoolean('${{ parameters.deployLinux }}') } catch { }
+                    $deployWindows = $false; try { $deployWindows = [System.Convert]::ToBoolean('${{ parameters.deployWindows }}') } catch { }
+                    $namespaces = @()
+                    if ($deployLinux) { $namespaces += "az-devops-linux-$instance" }
+                    if ($deployWindows) { $namespaces += "az-devops-windows-$instance" }
+                    if ($namespaces.Count -eq 0) { Write-Host 'No target namespaces selected (deployLinux/deployWindows both false); nothing to do'; exit 0 }
+
+                    # Helper to mask passwords for safe logging (preserve first 2 + last 2 chars)
+                    function MaskString([string]$s) {
+                      if (-not $s) { return '' }
+                      if ($s.Length -le 4) { return '****' }
+                      $mid = -join (1..($s.Length - 4) | ForEach-Object { '*' })
+                      return $s.Substring(0,2) + $mid + $s.Substring($s.Length - 2)
+                    }
+
+                    foreach ($ns in $namespaces) {
+                        try {
+                          Write-Host "Ensuring namespace $ns exists"
+                          kubectl --kubeconfig $env:KUBECONFIG create namespace $ns --dry-run=client -o yaml | kubectl --kubeconfig $env:KUBECONFIG apply -f -
+                          Write-Host "Ensuring docker-registry secret 'regsecret' exists in namespace $ns"
+                          kubectl --kubeconfig $env:KUBECONFIG create secret docker-registry regsecret --docker-server="$($env:ACR_NAME).azurecr.io" --docker-username="$($env:ACR_USERNAME)" --docker-password="$($env:ACR_PASSWORD)" -n $ns --dry-run=client -o yaml | kubectl --kubeconfig $env:KUBECONFIG apply -f -
+                          Write-Host "regsecret ensured in $ns"
+                          # Ensure the default serviceaccount in the namespace will use regsecret so pods without explicit
+                          # imagePullSecrets inherit the ability to pull from the private registry.
+                          try {
+                            kubectl --kubeconfig $env:KUBECONFIG patch serviceaccount default -n $ns -p '{"imagePullSecrets":[{"name":"regsecret"}]}' --type=merge
+                            Write-Host "Patched default serviceaccount in $ns to include regsecret"
+                          }
+                          catch {
+                            Write-Warning (("Failed to patch default serviceaccount in {0}: {1}" -f $ns, $_.Exception.Message))
+                          }
+
+                          # Verification: decode the regsecret and print registry, username, and a masked password so
+                          # pipeline logs can confirm the secret contents without exposing the raw password.
+                          try {
+                            $b64 = kubectl --kubeconfig $env:KUBECONFIG -n $ns get secret regsecret -o jsonpath='{.data.\.dockerconfigjson}' 2>$null
+                            if ($b64) {
+                              $jsonText = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($b64))
+                              $obj = $jsonText | ConvertFrom-Json
+                              $registry = ($obj.auths | Get-Member -MemberType NoteProperty | Select-Object -First 1).Name
+                              $entry = $obj.auths.$registry
+                              $username = $entry.username
+                              $password = $entry.password
+                              Write-Host ("regsecret verification - registry: {0}" -f $registry)
+                              Write-Host ("regsecret verification - username: {0}" -f $username)
+                              Write-Host ("regsecret verification - password (masked): {0}" -f (MaskString $password))
+                            }
+                            else { Write-Warning ("regsecret not found in {0} during verification" -f $ns) }
+                          }
+                          catch {
+                            Write-Warning (("Failed to decode regsecret in {0}: {1}" -f $ns, $_.Exception.Message))
+                          }
+                        }
+                        catch {
+                          Write-Warning ("Failed to ensure regsecret in {0}: {1}" -f $ns, $_.Exception.Message)
+                        }
+                    }
+
           # Simplified: delegate pool creation, KEDA install, and Helm deployment to the repo script.
           # We keep kubeconfig preparation above; now invoke the single deploy helper with the
           # necessary parameters and environment variables.
@@ -319,15 +544,25 @@ stages:
                 Set-StrictMode -Version Latest
                 $ErrorActionPreference = 'Stop'
                 Write-Host 'KEDA pods:'
-                try { kubectl get pods -n keda -o wide } catch { Write-Warning "Failed to list KEDA pods: $($_.Exception.Message)" }
+                try { kubectl get pods -n keda -o wide } catch { Write-Warning ("Failed to list KEDA pods: {0}" -f $_.Exception.Message) }
                 $inst = '${{ parameters.instanceNumber }}'; if([string]::IsNullOrWhiteSpace($inst)){ $inst='003' }
                 $linuxNs = "az-devops-linux-$inst"
                 $winNs = "az-devops-windows-$inst"
                 Write-Host "Note: az-devops-$inst is deprecated; showing per-OS namespaces instead."
-                Write-Host "Deployments in ${linuxNs} (if present):"
-                try { kubectl get deployment -n ${linuxNs} -o wide } catch { Write-Host "No resources found in ${linuxNs} or namespace missing." }
-                Write-Host "Deployments in ${winNs} (if present):"
-                try { kubectl get deployment -n ${winNs} -o wide } catch { Write-Host "No resources found in ${winNs} or namespace missing." }
+
+                # Fail the pipeline if any pod in the target release namespace is in ImagePullBackOff or ErrImagePull
+                $releaseNamespace = if([System.Convert]::ToBoolean('${{ parameters.deployLinux }}')) { $linuxNs } elseif([System.Convert]::ToBoolean('${{ parameters.deployWindows }}')) { $winNs } else { $linuxNs }
+                try {
+                  $bad = kubectl get pods -n $releaseNamespace --no-headers -o custom-columns=STATUS:.status.containerStatuses[*].state -A 2>$null | Select-String 'ImagePullBackOff|ErrImagePull' -Quiet
+                  if ($bad) {
+                    Write-Error "Detected ImagePullBackOff/ErrImagePull in namespace $releaseNamespace. Failing pipeline to surface image pull issues."
+                    exit 1
+                  }
+                }
+                catch {
+                  Write-Warning ("Failed to inspect pod statuses in {0}: {1}" -f $releaseNamespace, $_.Exception.Message)
+                }
+                Write-Host "Deploy namespace $releaseNamespace appears healthy (no ImagePullBackOff/ErrImagePull detected)."
 
       - job: Summary
         displayName: Summary
@@ -461,10 +696,10 @@ stages:
                         Write-Host "Wrote masked helm applied values to $valsPath"
                         Write-Host "##vso[task.uploadfile]$valsPath"
                       }
-                    } catch { Write-Host "helm get values failed: $($_.Exception.Message)" }
+                    } catch { Write-Host ("helm get values failed: {0}" -f $_.Exception.Message) }
                   } else { Write-Host 'helm client not found in PATH; skipping helm get values.' }
                 } catch {
-                  Write-Host "Summary step encountered non-fatal error: $($_.Exception.Message)"
+                  Write-Host ("Summary step encountered non-fatal error: {0}" -f $_.Exception.Message)
                 } finally {
                   # Ensure this summary step never fails the pipeline
                   exit 0

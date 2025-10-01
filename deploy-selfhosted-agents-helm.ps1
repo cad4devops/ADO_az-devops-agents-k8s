@@ -27,8 +27,9 @@ This script is intentionally conservative: it will not enable ACR admin or creat
 param(
     [Parameter(Mandatory = $true)] [string] $InstanceNumber, #'003'
     [Parameter(Mandatory = $false)] [string] $Kubeconfig = "aks-ado-agents-$InstanceNumber",
-    [Parameter(Mandatory = $false)] [string] $KubeconfigAzureLocal, #"my-workload-cluster-dev-014-kubeconfig.yaml"
+    [Parameter(Mandatory = $false)] [string] $KubeconfigAzureLocal, #"workload-cluster-003-kubeconfig.yaml"
     [Parameter(Mandatory = $false)] [string] $KubeconfigFolder,
+    [Parameter(Mandatory = $false)] [string] $DefaultLocalKubeconfig = "config\workload-cluster-$InstanceNumber-kubeconfig.yaml",
     [Parameter(Mandatory = $false)] [switch] $DeployLinux = $true,
     [Parameter(Mandatory = $false)] [switch] $DeployWindows = $true,
     [Parameter(Mandatory = $false)] [string] $WindowsVersion = '2022',
@@ -38,7 +39,7 @@ param(
     [Parameter(Mandatory = $false)] [string] $HelmTimeout = '2m',
     [Parameter(Mandatory = $false)] [switch] $UseAzureLocal,
     [Parameter(Mandatory = $false)] [string] $KubeContext = "aks-ado-agents-$InstanceNumber",
-    [Parameter(Mandatory = $false)] [string] $KubeContextAzureLocal, #"my-workload-cluster-dev-014-admin@my-workload-cluster-dev-014"
+    [Parameter(Mandatory = $false)] [string] $KubeContextAzureLocal, #"workload-cluster-003-admin@workload-cluster-003"
     [Parameter(Mandatory = $false)] [string] $AksResourceGroup = "rg-aks-ado-agents-$InstanceNumber",
     [Parameter(Mandatory = $false)] [string] $AksClusterName = "aks-ado-agents-$InstanceNumber",
     [Parameter(Mandatory = $false)] [string] $AcrUsername,
@@ -134,7 +135,7 @@ if (-not $WriteValuesOnly.IsPresent) {
             try { $isAbs = [System.IO.Path]::IsPathRooted($effectiveKubeParam) } catch { $isAbs = $false }
             if ($isAbs) { $resolvedLocalKube = $effectiveKubeParam } else { $resolvedLocalKube = Join-Path $effectiveKubeFolder $effectiveKubeParam }
         }
-        else { $resolvedLocalKube = Join-Path $effectiveKubeFolder 'config\my-workload-cluster-dev-014-kubeconfig.yaml' }
+        else { $resolvedLocalKube = Join-Path $effectiveKubeFolder $DefaultLocalKubeconfig }
 
         if (Test-Path $resolvedLocalKube) {
             $env:KUBECONFIG = (Resolve-Path $resolvedLocalKube).Path
@@ -226,6 +227,30 @@ if (-not $AcrUsername -and $env:ACR_ADO_USERNAME) {
 if (-not $AcrPassword -and $env:ACR_ADO_PASSWORD) {
     $AcrPassword = $env:ACR_ADO_PASSWORD
     Write-Host "Using ACR password from env ACR_ADO_PASSWORD"
+}
+
+# Defensive: pipelines sometimes pass literal macro strings like '$(ACR_USERNAME)' when variables
+# are missing or not expanded in the caller context. Detect common unresolved macro patterns and
+# prefer the runtime environment variables (ACR_USERNAME/ACR_PASSWORD) when available.
+if ($AcrUsername -and ($AcrUsername -match '\$\(|\$\{')) {
+    if ($env:ACR_USERNAME) {
+        Write-Host "Notice: AcrUsername contains unresolved macro; using runtime env ACR_USERNAME instead"
+        $AcrUsername = $env:ACR_USERNAME
+    }
+    elseif ($env:ACR_ADO_USERNAME) {
+        Write-Host "Notice: AcrUsername contains unresolved macro; using fallback env ACR_ADO_USERNAME instead"
+        $AcrUsername = $env:ACR_ADO_USERNAME
+    }
+}
+if ($AcrPassword -and ($AcrPassword -match '\$\(|\$\{')) {
+    if ($env:ACR_PASSWORD) {
+        Write-Host "Notice: AcrPassword contains unresolved macro; using runtime env ACR_PASSWORD instead"
+        $AcrPassword = $env:ACR_PASSWORD
+    }
+    elseif ($env:ACR_ADO_PASSWORD) {
+        Write-Host "Notice: AcrPassword contains unresolved macro; using fallback env ACR_ADO_PASSWORD instead"
+        $AcrPassword = $env:ACR_ADO_PASSWORD
+    }
 }
 
 # If either value is set (param or env), require both to avoid proceeding with incomplete credentials.

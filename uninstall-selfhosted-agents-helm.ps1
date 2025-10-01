@@ -19,10 +19,11 @@ and Terminating namespaces can be forcibly cleared of finalizers if necessary.
 param(
     [Parameter(Mandatory = $true)] [string] $InstanceNumber, #'003'
     [Parameter(Mandatory = $false)] [string] $Kubeconfig = "aks-ado-agents-$InstanceNumber",
-    [Parameter(Mandatory = $false)] [string] $KubeconfigAzureLocal, #"my-workload-cluster-dev-014-kubeconfig.yaml"
+    [Parameter(Mandatory = $false)] [string] $KubeconfigAzureLocal, #"workload-cluster-003-kubeconfig.yaml"
     [Parameter(Mandatory = $false)] [string] $KubeconfigFolder,        
+    [Parameter(Mandatory = $false)] [string] $DefaultLocalKubeconfig = 'config\workload-cluster-003-kubeconfig.yaml',
     [Parameter(Mandatory = $false)] [string] $KubeContext = "aks-ado-agents-$InstanceNumber",
-    [Parameter(Mandatory = $false)] [string] $KubeContextAzureLocal, #"my-workload-cluster-dev-014-admin@my-workload-cluster-dev-014"
+    [Parameter(Mandatory = $false)] [string] $KubeContextAzureLocal, #"workload-cluster-003-admin@workload-cluster-003"
     [Parameter(Mandatory = $false)] [switch] $UseAzureLocal,
     [Parameter(Mandatory = $false)] [string] $AksResourceGroup = "rg-aks-ado-agents-$InstanceNumber",
     [Parameter(Mandatory = $false)] [string] $AksClusterName = "aks-ado-agents-$InstanceNumber",
@@ -187,7 +188,7 @@ else {
         else { $localCandidate = Join-Path $effectiveKubeFolder $effectiveKubeParam }
     }
     else {
-        $localCandidate = Join-Path $effectiveKubeFolder 'config\my-workload-cluster-dev-014-kubeconfig.yaml'
+        $localCandidate = Join-Path $effectiveKubeFolder $DefaultLocalKubeconfig
     }
 
     if (Test-Path $localCandidate) {

@@ -3,14 +3,15 @@ Param(
     [Parameter(Mandatory = $false)][string]$ProjectName = 'Cad4DevOps',
     [Parameter(Mandatory = $false)][string]$RepositoryName = 'ADO_az-devops-agents-k8s',
     [Parameter(Mandatory = $false)][string]$AzdoPatSecretName = 'AZDO_PAT',
-    [Parameter(Mandatory = $false)][string]$VariableGroupName = 'ADO_az-devops-agents-k8s',
-    [Parameter(Mandatory = $false)][string]$KubeConfigSecretFile = "AKS_my-workload-cluster-dev-014-kubeconfig_file",
-    [Parameter(Mandatory = $false)][string]$KubeConfigFilePath = "C:\Users\emmanuel.DEVOPSABCS.000\.kube\my-workload-cluster-dev-014-kubeconfig.yaml",
+    [Parameter(Mandatory = $false)][string]$VariableGroupName = 'ADO_az-devops-agents-k8s-003',
+    [Parameter(Mandatory = $false)][string]$KubeConfigSecretFile = "AKS_workload-cluster-003-kubeconfig_file",
+    [Parameter(Mandatory = $false)][string]$KubeConfigFilePath = "C:\Users\emmanuel.DEVOPSABCS.000\.kube\workload-cluster-003-kubeconfig.yaml",
     [Parameter(Mandatory = $false)][string]$InstallPipelineName = "GEN_az-devops-agents-k8s-deploy-self-hosted-agents-helm",
     [Parameter(Mandatory = $false)][string]$UninstallPipelineName = "GEN_az-devops-agents-k8s-uninstall-selfhosted-agents-helm",
     [Parameter(Mandatory = $false)][string]$ValidatePipelineName = "GEN_az-devops-agents-k8s-validate-self-hosted-agents-helm",
     [Parameter(Mandatory = $false)][string]$ImageRefreshPipelineName = "GEN_az-devops-agents-k8s-weekly-image-refresh",
-    [Parameter(Mandatory = $false)][string]$RunOnPoolSamplePipelineName = "GEN_az-devops-agents-k8s-run-on-selfhosted-pool-sample-helm"
+    [Parameter(Mandatory = $false)][string]$RunOnPoolSamplePipelineName = "GEN_az-devops-agents-k8s-run-on-selfhosted-pool-sample-helm",
+    [Parameter(Mandatory = $false)][string]$DeployAksInfraPipelineName = "GEN_az-devops-agents-k8s-deploy-aks-helm"
 )
 
 Set-StrictMode -Version Latest
@@ -177,6 +178,7 @@ foreach ($relPath in $pipelineFiles) {
         '.azuredevops/pipelines/validate-selfhosted-agents-helm.yml' { $pipelineName = $ValidatePipelineName }
         '.azuredevops/pipelines/weekly-agent-images-refresh.yml' { $pipelineName = $ImageRefreshPipelineName }
         '.azuredevops/pipelines/run-on-selfhosted-pool-sample-helm.yml' { $pipelineName = $RunOnPoolSamplePipelineName }
+        '.azuredevops/pipelines/deploy-aks.yml' { $pipelineName = $DeployAksInfraPipelineName }
         default { $pipelineName = (Split-Path $relPath -Leaf) }
     }
     Write-Host "Pipeline $relPath will be created/updated with name: $pipelineName"

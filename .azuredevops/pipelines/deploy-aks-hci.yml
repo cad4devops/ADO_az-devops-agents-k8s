@@ -1,0 +1,123 @@
+## Azure DevOps pipeline to create an AKS-HCI workload cluster using the repo script
+## This pipeline runs the script under Windows PowerShell (desktop) because the script
+## requires Windows PowerShell 5.x. Use a self-hosted Windows agent or microsoft-hosted
+## 'windows-latest' if that meets your environment requirements.
+
+trigger: none
+pr: none
+
+parameters:
+  - name: InstanceNumber
+    type: string
+    default: "002"
+  - name: AutoApprove
+    type: boolean
+    default: true
+  - name: LinuxNodeCount
+    type: number
+    default: 1
+  - name: WindowsNodeCount
+    type: number
+    default: 1
+  - name: DeleteCluster
+    type: boolean
+    default: false
+
+variables:
+  - group: "ADO_az-devops-agents-k8s-${{ parameters.InstanceNumber }}" # to get AZDO_PAT
+  - name: InstanceNumber
+    value: ${{ parameters.InstanceNumber }}
+  - name: AutoApprove
+    value: ${{ parameters.AutoApprove }}
+  - name: LinuxNodeCount
+    value: ${{ parameters.LinuxNodeCount }}
+  - name: WindowsNodeCount
+    value: ${{ parameters.WindowsNodeCount }}
+  - name: DeleteCluster
+    value: ${{ parameters.DeleteCluster }}
+
+# Use a Windows agent so we can run Windows PowerShell 5.x
+pool:
+  name: "KubernetesPoolWindows"
+
+stages:
+  - stage: deploy
+    displayName: Deploy AKS-HCI Workload Cluster
+    jobs:
+      - job: deploy
+        displayName: Create AKS-HCI Workload Cluster
+        steps:
+          - checkout: self
+
+          - task: PowerShell@2
+            displayName: "Run Manage-AksHci-WorkloadCluster.ps1 (Windows PowerShell host)"
+            inputs:
+              targetType: "inline"
+              # We launch Windows PowerShell (powershell.exe) explicitly so the script runs in PSv5
+              script: |
+                Write-Host "Preparing to run Manage-AksHci-WorkloadCluster.ps1 for instance $(InstanceNumber)"
+                $instance = '$(InstanceNumber)'
+                $auto = [bool]('$(AutoApprove)')
+                $linuxCount = [int]('$(LinuxNodeCount)')
+                $windowsCount = [int]('$(WindowsNodeCount)')
+
+                # Write kubeconfig into the pipeline workspace so we can upload it to Azure DevOps secure files
+                $kubeDir = Join-Path -Path '$(Pipeline.Workspace)' -ChildPath 'kubeconfigs'
+                if (-not (Test-Path $kubeDir)) { New-Item -ItemType Directory -Path $kubeDir | Out-Null }
+                $kubePath = Join-Path -Path $kubeDir -ChildPath ("workload-cluster-{0}-kubeconfig.yaml" -f $instance)
+
+                $args = @('-NoProfile','-ExecutionPolicy','Bypass','-File','./infra/scripts/AzureLocal/Manage-AksHci-WorkloadCluster.ps1', '-InstanceNumber',$instance,'-LinuxNodeCount',$linuxCount,'-WindowsNodeCount',$windowsCount,'-KubeConfigPath',$kubePath)
+                # Default to waiting for provisioning and collecting diagnostics on failure in CI runs
+                $args += '-WaitForProvisioning','-ProvisioningTimeoutMinutes','40','-CollectDiagnosticsOnFailure'
+                if ($auto) { $args += '-AutoApprove' }
+                $delete = [bool]('$(DeleteCluster)')
+                if ($delete) { $args += '-DeleteCluster' }
+
+                  Write-Host "Invoking Windows PowerShell with arguments: $($args -join ' ')"
+                  # Call desktop PowerShell directly so stdout/stderr streams to the pipeline in real time
+                  & 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' @args
+                  $exit = $LASTEXITCODE
+                  if ($exit -ne 0) {
+                      Write-Error "Manage-AksHci-WorkloadCluster.ps1 failed with exit code $exit"
+                      exit $exit
+                }
+
+          - task: PowerShell@2
+            displayName: "Upload kubeconfig to Azure DevOps secure files"
+            inputs:
+              targetType: "inline"
+              script: |
+                # Required pipeline variables (set these as pipeline secrets/variables in your pipeline):
+                # $(SecureFilePAT) - Personal Access Token with permission to manage secure files
+                # $(AzureDevOpsOrg) - your org (e.g., 'myorg' or 'https://dev.azure.com/myorg')
+                # $(AzureDevOpsProjectID) - project id or name
+
+                if (-not $env:SecureFilePAT) { Write-Error 'SecureFilePAT environment variable not set'; exit 1 }
+                if (-not $env:AzureDevOpsOrg) { Write-Error 'AzureDevOpsOrg environment variable not set'; exit 1 }
+                if (-not $env:AzureDevOpsProjectID) { Write-Error 'AzureDevOpsProjectID environment variable not set'; exit 1 }
+
+                $instance = '$(InstanceNumber)'
+                $kubePath = Join-Path -Path '$(Pipeline.Workspace)' -ChildPath ("kubeconfigs/workload-cluster-{0}-kubeconfig.yaml" -f $instance)
+                if (-not (Test-Path $kubePath)) { Write-Error "Kubeconfig not found at $kubePath"; exit 2 }
+
+                $secureName = "workload-cluster-{0}-kubeconfig.yaml" -f $instance
+                Write-Host "Uploading $kubePath as secure file named $secureName"
+
+                $uploadScript = 'scripts/upload-secure-file-rest.ps1'
+                if (-not (Test-Path $uploadScript)) { Write-Error "Upload script not found: $uploadScript"; exit 3 }
+
+                & pwsh -NoProfile -Command {
+                    param($pat,$org,$proj,$name,$path)
+                    & .\scripts\upload-secure-file-rest.ps1 -PAT $pat -AzureDevOpsOrg $org -AzureDevOpsProjectID $proj -SecureNameFile2Upload $name -SecureNameFilePath2Upload $path
+                } -ArgumentList $env:SecureFilePAT, $env:AzureDevOpsOrg, $env:AzureDevOpsProjectID, $secureName, $kubePath
+            env:
+              # Use AZDO_PAT from the variable group ADO_az-devops-agents-k8s
+              SecureFilePAT: $(AZDO_PAT)
+              AzureDevOpsOrg: $(AzureDevOpsOrg)
+              AzureDevOpsProjectID: $(AzureDevOpsProjectID)
+
+          - task: PublishPipelineArtifact@1
+            displayName: "Publish logs/outputs (optional)"
+            inputs:
+              targetPath: "infra/scripts/AzureLocal"
+              artifact: "aks-hci-scripts"

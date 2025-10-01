@@ -30,7 +30,7 @@ resources:
       trigger: true # automatic trigger on successful run of source pipeline
 
 variables:
-  - group: ADO_az-devops-agents-k8s # to get AZDO_PAT
+  - group: "ADO_az-devops-agents-k8s-003" # to get AZDO_PAT
   - name: samplePipelineNameHelm
     value: GEN_az-devops-agents-k8s-run-on-selfhosted-pool-sample-helm # changed to helm pipeline name
 
