@@ -35,9 +35,9 @@ parameters:
       - "DOS_DevOpsShield_Prod"
   - name: ACR_NAME
     type: string
-    default: "cragents003c66i4n7btfksg"
+    default: "devopsabcsrunners"
     values:
-      - "cragents003c66i4n7btfksg"
+      - "devopsabcsrunners"
   - name: useAzureLocal
     type: boolean
     default: false
@@ -59,21 +59,21 @@ parameters:
     default: "KubernetesPoolWindows"
   - name: kubeconfigAzureLocal
     type: string
-    default: "my-workload-cluster-dev-014-kubeconfig.yaml"
+    default: "workload-cluster-003-kubeconfig.yaml"
     displayName: Kubeconfig file name to use in Azure-local mode
   - name: kubeContextAzureLocal
     type: string
-    default: "my-workload-cluster-dev-014-admin@my-workload-cluster-dev-014"
+    default: "workload-cluster-003-admin@workload-cluster-003"
     displayName: Kube context name to verify in Azure-local mode
   - name: kubeConfigSecretFile
     type: string
-    default: "AKS_my-workload-cluster-dev-014-kubeconfig_file"
+    default: "AKS_workload-cluster-003-kubeconfig_file"
   - name: useOnPremAgents
     type: boolean
     default: true # Set to true to use on-premises agents, false to use cloud agents
 
 variables:
-  - group: ADO_az-devops-agents-k8s
+  - group: "ADO_az-devops-agents-k8s-003" # to get AZDO_PAT
   - name: azureSubscription
     value: ${{ parameters.AZURE_SERVICE_CONNECTION }}
 

@@ -31,9 +31,9 @@ parameters:
       - "DOS_DevOpsShield_Prod"
   - name: ACR_NAME
     type: string
-    default: "cragents003c66i4n7btfksg"
+    default: "devopsabcsrunners"
     values:
-      - "cragents003c66i4n7btfksg"
+      - "devopsabcsrunners"
   - name: skipLinux
     type: boolean
     default: false

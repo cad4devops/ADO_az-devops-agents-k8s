@@ -8,20 +8,20 @@ pr: none
 parameters:
   - name: AZURE_SERVICE_CONNECTION
     type: string
-    default: "DOS_DevOpsShield_Prod"
+    default: "__AZURE_SERVICE_CONNECTION__"
     values:
-      - "DOS_DevOpsShield_Prod"
+      - "__AZURE_SERVICE_CONNECTION__"
   - name: ACR_NAME
     type: string
-    default: "devopsabcsrunners"
+    default: "__ACR_NAME__"
     values:
-      - "devopsabcsrunners"
+      - "__ACR_NAME__"
   - name: SkipContainerRegistry
     type: boolean
-    default: True
+    default: __SKIP_CONTAINER_REGISTRY__
   - name: InstanceNumber
     type: string
-    default: "003"
+    default: "__INSTANCE_NUMBER__"
   - name: DeleteResourceGroup
     type: boolean
     default: false
@@ -117,4 +117,3 @@ stages:
             inputs:
               targetPath: "infra/bicep"
               artifact: "bicep-deploy"
-

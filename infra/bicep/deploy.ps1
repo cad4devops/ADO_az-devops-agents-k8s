@@ -15,14 +15,64 @@ param(
     [Parameter(Mandatory = $false)] [string] $ResourceGroupName,
     [Parameter(Mandatory = $true)] [string] $Location, #'canadacentral'
     [Parameter(Mandatory = $false)] [string] $ContainerRegistryName,
+    [Parameter(Mandatory = $false)] [switch] $SkipContainerRegistry,
     [Parameter(Mandatory = $false)] [bool] $EnableWindows = $true,
     [Parameter(Mandatory = $false)] [int] $WindowsNodeCount = 1,
     [Parameter(Mandatory = $false)] [int] $LinuxNodeCount = 1,
     [Parameter(Mandatory = $false)] [string] $WindowsAdminUsername,
-    [Parameter(Mandatory = $false)] [SecureString] $WindowsAdminPassword
+    [Parameter(Mandatory = $false)] [SecureString] $WindowsAdminPassword,
+    [Parameter(Mandatory = $false)] [string] $KeyVaultName,
+    [Parameter(Mandatory = $false)] [switch] $RequireDeletionConfirmation,
+    [Parameter(Mandatory = $false)] [string] $ConfirmDeletionToken,
+    [Parameter(Mandatory = $false)] [switch] $DeleteResourceGroup,
+    [Parameter(Mandatory = $false)] [switch] $DeleteAksOnly
 )
 
 function Fail($msg) { Write-Error $msg; exit 1 }
+
+# Generate a random, AZ-acceptable Windows admin password that meets complexity
+function New-RandomPassword([int]$length = 16) {
+    if ($length -lt 12) { $length = 12 }
+    $upper = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.ToCharArray()
+    $lower = 'abcdefghijklmnopqrstuvwxyz'.ToCharArray()
+    $digits = '0123456789'.ToCharArray()
+    # A conservative set of special chars that are safe to pass on CLI and in ARM parameters
+    $special = '!@#%&*()-_=+[]{}.,?'.ToCharArray()
+
+    $rnd = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    $pick = {
+        param($arr)
+        $b = New-Object 'byte[]' 4
+        $rnd.GetBytes($b)
+        $idx = [BitConverter]::ToUInt32($b, 0) % $arr.Length
+        return $arr[$idx]
+    }
+
+    # Ensure at least one of each category
+    $chars = @()
+    $chars += $pick.Invoke($upper)
+    $chars += $pick.Invoke($lower)
+    $chars += $pick.Invoke($digits)
+    $chars += $pick.Invoke($special)
+
+    $all = $upper + $lower + $digits + $special
+    while ($chars.Count -lt $length) { $chars += $pick.Invoke($all) }
+
+    # Shuffle
+    $chars = $chars | Sort-Object { Get-Random }
+    return -join $chars
+}
+
+# Convert a SecureString to plain text safely
+function SecureString-ToPlainText($ss) {
+    if (-not $ss) { return $null }
+    if ($ss -is [System.Security.SecureString]) {
+        $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($ss)
+        try { return [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr) }
+        finally { [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+    }
+    return [string]$ss
+}
 
 # Validate az is present
 if (-not (Get-Command az -ErrorAction SilentlyContinue)) { Fail 'Azure CLI "az" not found on PATH. Install Azure CLI and retry.' }
@@ -48,6 +98,61 @@ $bicepFile = Join-Path $PSScriptRoot 'main.bicep'
 # Compute AKS name (must match Bicep naming)
 $aksName = "aks-ado-agents-$InstanceNumber".ToLower()
 
+# If requested, perform deletion actions and exit early
+if ($DeleteResourceGroup -and $DeleteAksOnly) {
+    Fail 'Only one of -DeleteResourceGroup or -DeleteAksOnly may be specified.'
+}
+
+function Require-DeleteConfirmation() {
+    if (-not $RequireDeletionConfirmation) { return }
+    $expected = "DELETE-$InstanceNumber"
+    if (-not $ConfirmDeletionToken) {
+        Fail ("Destructive operation requested but no ConfirmDeletionToken provided. To proceed, pass -RequireDeletionConfirmation and -ConfirmDeletionToken '{0}'" -f $expected)
+    }
+    if ($ConfirmDeletionToken -ne $expected) {
+        Fail ("ConfirmDeletionToken did not match expected token. To avoid accidental deletion, provide the token: {0}" -f $expected)
+    }
+}
+
+if ($DeleteResourceGroup) {
+    Require-DeleteConfirmation
+    Write-Host "Request received: delete entire resource group '$ResourceGroupName' and all contained resources (AKS, ACR, etc)."
+    # Check existence
+    $rgCheck = az group show -n $ResourceGroupName --only-show-errors | ConvertFrom-Json -ErrorAction SilentlyContinue
+    if (-not $rgCheck) {
+        Write-Warning "Resource group '$ResourceGroupName' does not exist or is not accessible. Nothing to delete."
+        exit 0
+    }
+    Write-Host "Deleting resource group '$ResourceGroupName'... This may take several minutes."
+    try {
+        az group delete -n $ResourceGroupName --yes --only-show-errors
+        Write-Host "Delete initiated for resource group '$ResourceGroupName'."
+        exit 0
+    }
+    catch {
+        Fail ("Failed to delete resource group '{0}': {1}" -f $ResourceGroupName, $_.Exception.Message)
+    }
+}
+
+if ($DeleteAksOnly) {
+    Require-DeleteConfirmation
+    Write-Host "Request received: delete AKS cluster '$aksName' in resource group '$ResourceGroupName'."
+    # Check whether the cluster exists
+    $aksCheck = az aks show -n $aksName -g $ResourceGroupName --only-show-errors | ConvertFrom-Json -ErrorAction SilentlyContinue
+    if (-not $aksCheck) {
+        Write-Warning "AKS cluster '$aksName' not found in resource group '$ResourceGroupName'. Nothing to delete."
+        exit 0
+    }
+    Write-Host "Deleting AKS cluster '$aksName'... This may take several minutes."
+    try {
+        az aks delete -n $aksName -g $ResourceGroupName --yes --only-show-errors
+        Write-Host "Delete initiated for AKS cluster '$aksName'."
+        exit 0
+    }
+    catch {
+        Fail ("Failed to delete AKS cluster '{0}': {1}" -f $aksName, $_.Exception.Message)
+    }
+}
 # Detect whether an AKS with that name already exists in the target RG. If it does,
 # we must avoid attempting to add agent pools through the managedCluster resource
 # in Bicep. Instead, we'll set skipAks=true and perform per-pool operations later.
@@ -74,6 +179,59 @@ $paramArgs = @(
     "linuxNodeCount=$LinuxNodeCount"
     "skipAks=$skipAksStr"
 )
+
+# If the caller explicitly provided a ContainerRegistryName, pass it through to the template and
+# ensure the template does not attempt to create a new registry.
+if ($ContainerRegistryName -and -not [string]::IsNullOrWhiteSpace($ContainerRegistryName)) {
+    $paramArgs += "containerRegistryName=$ContainerRegistryName"
+}
+
+# Determine whether the Bicep should skip creating an ACR. Caller can request this via the
+# -SkipContainerRegistry switch, or it will be implied when a ContainerRegistryName is provided.
+$effectiveSkipCr = ($SkipContainerRegistry.IsPresent -or ($ContainerRegistryName -and -not [string]::IsNullOrWhiteSpace($ContainerRegistryName)))
+$paramArgs += "skipContainerRegistry=$($effectiveSkipCr.ToString().ToLower())"
+
+# If Windows is enabled, ensure we have admin username/password values and pass them as secure parameters
+if ($EnableWindows) {
+    if (-not $WindowsAdminUsername -or [string]::IsNullOrWhiteSpace($WindowsAdminUsername)) {
+        $WindowsAdminUsername = 'azureuser'
+        Write-Host "No WindowsAdminUsername provided; defaulting to: $WindowsAdminUsername"
+    }
+
+    # Convert SecureString to plain text if necessary or generate a new secure password if none provided
+    $plainWindowsAdminPassword = SecureString-ToPlainText $WindowsAdminPassword
+    $generatedPassword = $false
+    if (-not $plainWindowsAdminPassword -or [string]::IsNullOrWhiteSpace($plainWindowsAdminPassword)) {
+        $plainWindowsAdminPassword = New-RandomPassword 16
+        $generatedPassword = $true
+        Write-Host "No WindowsAdminPassword provided; generated a compliant random password to satisfy AKS preflight validation."
+    }
+
+    # Append Windows admin credentials to the parameter list. Use the ARM parameter names expected by the Bicep template.
+    $paramArgs += "windowsAdminUsername=$WindowsAdminUsername"
+    # For passwords, ensure proper quoting so special chars are preserved when passed to az CLI
+    $paramArgs += "windowsAdminPassword=$plainWindowsAdminPassword"
+}
+
+# If we generated a Windows admin password and the caller provided a KeyVaultName, store it there
+if ($EnableWindows -and $generatedPassword -and $KeyVaultName) {
+    try {
+        $secretName = "WinAdminPassword-$InstanceNumber"
+        Write-Host "Storing generated Windows admin password into Key Vault '$KeyVaultName' as secret '$secretName' (value will not be printed)."
+        # Use az keyvault secret set to store the secret
+        $kvArgs = @('keyvault', 'secret', 'set', '--vault-name', $KeyVaultName, '--name', $secretName, '--value', $plainWindowsAdminPassword, '--only-show-errors')
+        $out = & az @kvArgs 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Failed to store Windows admin password in Key Vault: $out"
+        }
+        else {
+            Write-Host "Password stored to Key Vault secret: $secretName"
+        }
+    }
+    catch {
+        Write-Warning "Exception while storing secret to Key Vault: $($_.Exception.Message)"
+    }
+}
 
 Write-Host "Running what-if preview for deployment to resource group $ResourceGroupName (this will not make changes)"
 az deployment group what-if --resource-group $ResourceGroupName --template-file $bicepFile @paramArgs --only-show-errors
@@ -144,7 +302,8 @@ if ($EnableWindows) {
     else {
         # Determine a valid Windows nodepool name. Azure enforces short names for Windows pools
         # (error observed: "Windows agent pool name can not be longer than 6 characters").
-        $desiredNodePoolName = 'winpool'
+        # Use 'winp' which is <= 6 chars and matches the Bicep template.
+        $desiredNodePoolName = 'winp'
         $maxPoolNameLen = 6
         if ($desiredNodePoolName.Length -gt $maxPoolNameLen) {
             $nodepoolName = $desiredNodePoolName.Substring(0, $maxPoolNameLen).ToLower()
