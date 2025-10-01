@@ -6,6 +6,7 @@ Important environment variables
 
 - `AZDO_PAT` — Preferred non-interactive PAT. When present the provisioning helper will use this value and will not prompt interactively.
 - `ACR_ADO_USERNAME` / `ACR_ADO_PASSWORD` — Optional ACR credentials. If one is provided the other must also be provided.
+- (Verification) After the orchestrator runs the ACR credential helper it expects to find `ACR_USERNAME` (non‑secret) and `ACR_PASSWORD` (secret) in the Azure DevOps variable group. Presence is validated automatically when `AZDO_PAT` is set. Secret values will appear as `null` when listed via CLI — this is expected; only the variable names are required for the pass condition.
 
 Recommended PAT scopes
 
