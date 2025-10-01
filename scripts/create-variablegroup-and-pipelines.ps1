@@ -6,12 +6,12 @@ Param(
     [Parameter(Mandatory = $false)][string]$VariableGroupName = 'ADO_az-devops-agents-k8s-003',
     [Parameter(Mandatory = $false)][string]$KubeConfigSecretFile = "AKS_workload-cluster-003-kubeconfig_file",
     [Parameter(Mandatory = $false)][string]$KubeConfigFilePath = "C:\Users\emmanuel.DEVOPSABCS.000\.kube\workload-cluster-003-kubeconfig.yaml",
-    [Parameter(Mandatory = $false)][string]$InstallPipelineName = "GEN_az-devops-agents-k8s-deploy-self-hosted-agents-helm",
-    [Parameter(Mandatory = $false)][string]$UninstallPipelineName = "GEN_az-devops-agents-k8s-uninstall-selfhosted-agents-helm",
-    [Parameter(Mandatory = $false)][string]$ValidatePipelineName = "GEN_az-devops-agents-k8s-validate-self-hosted-agents-helm",
-    [Parameter(Mandatory = $false)][string]$ImageRefreshPipelineName = "GEN_az-devops-agents-k8s-weekly-image-refresh",
-    [Parameter(Mandatory = $false)][string]$RunOnPoolSamplePipelineName = "GEN_az-devops-agents-k8s-run-on-selfhosted-pool-sample-helm",
-    [Parameter(Mandatory = $false)][string]$DeployAksInfraPipelineName = "GEN_az-devops-agents-k8s-deploy-aks-helm"
+    [Parameter(Mandatory = $false)][string]$InstallPipelineName = "ADO_az-devops-agents-k8s-deploy-self-hosted-agents-helm",
+    [Parameter(Mandatory = $false)][string]$UninstallPipelineName = "ADO_az-devops-agents-k8s-uninstall-selfhosted-agents-helm",
+    [Parameter(Mandatory = $false)][string]$ValidatePipelineName = "ADO_az-devops-agents-k8s-validate-self-hosted-agents-helm",
+    [Parameter(Mandatory = $false)][string]$ImageRefreshPipelineName = "ADO_az-devops-agents-k8s-weekly-image-refresh",
+    [Parameter(Mandatory = $false)][string]$RunOnPoolSamplePipelineName = "ADO_az-devops-agents-k8s-run-on-selfhosted-pool-sample-helm",
+    [Parameter(Mandatory = $false)][string]$DeployAksInfraPipelineName = "ADO_az-devops-agents-k8s-deploy-aks-helm"
 )
 
 Set-StrictMode -Version Latest

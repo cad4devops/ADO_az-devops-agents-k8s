@@ -37,12 +37,12 @@ param(
     [Parameter(Mandatory = $false)][string]$AzureDevOpsServiceConnectionName = 'DOS_DevOpsShield_Prod',
     [Parameter(Mandatory = $false)][string]$AzureDevOpsVariableGroup = "ADO_az-devops-agents-k8s-$InstanceNumber",
     [Parameter(Mandatory = $false)][string]$AzureDevOpsPatTokenEnvironmentVariableName = "AZDO_PAT",
-    [Parameter(Mandatory = $false)][string]$InstallPipelineName = "GEN_az-devops-agents-k8s-deploy-self-hosted-agents-helm",
-    [Parameter(Mandatory = $false)][string]$UninstallPipelineName = "GEN_az-devops-agents-k8s-uninstall-selfhosted-agents-helm",
-    [Parameter(Mandatory = $false)][string]$ValidatePipelineName = "GEN_az-devops-agents-k8s-validate-self-hosted-agents-helm",
-    [Parameter(Mandatory = $false)][string]$ImageRefreshPipelineName = "GEN_az-devops-agents-k8s-weekly-image-refresh",
-    [Parameter(Mandatory = $false)][string]$RunOnPoolSamplePipelineName = "GEN_az-devops-agents-k8s-run-on-selfhosted-pool-sample-helm",
-    [Parameter(Mandatory = $false)][string]$DeployAksInfraPipelineName = "GEN_az-devops-agents-k8s-deploy-aks-helm",
+    [Parameter(Mandatory = $false)][string]$InstallPipelineName = "ADO_az-devops-agents-k8s-deploy-self-hosted-agents-helm",
+    [Parameter(Mandatory = $false)][string]$UninstallPipelineName = "ADO_az-devops-agents-k8s-uninstall-selfhosted-agents-helm",
+    [Parameter(Mandatory = $false)][string]$ValidatePipelineName = "ADO_az-devops-agents-k8s-validate-self-hosted-agents-helm",
+    [Parameter(Mandatory = $false)][string]$ImageRefreshPipelineName = "ADO_az-devops-agents-k8s-weekly-image-refresh",
+    [Parameter(Mandatory = $false)][string]$RunOnPoolSamplePipelineName = "ADO_az-devops-agents-k8s-run-on-selfhosted-pool-sample-helm",
+    [Parameter(Mandatory = $false)][string]$DeployAksInfraPipelineName = "ADO_az-devops-agents-k8s-deploy-aks-helm",
     [Parameter(Mandatory = $false)][string]$KubeConfigSecretFile = "AKS_workload-cluster-$InstanceNumber-kubeconfig_file"
 )
 
