@@ -60,6 +60,8 @@ stages:
                 $auto = [bool]('$(AutoApprove)')
                 $linuxCount = [int]('$(LinuxNodeCount)')
                 $windowsCount = [int]('$(WindowsNodeCount)')
+                $delete = [bool]('$(DeleteCluster)')
+                if ($delete) { Write-Host "DeleteCluster=true -> will skip kubeconfig upload task via condition" }
 
                 # Write kubeconfig into the pipeline workspace so we can upload it to Azure DevOps secure files
                 $kubeDir = Join-Path -Path '$(Pipeline.Workspace)' -ChildPath 'kubeconfigs'
@@ -70,7 +72,6 @@ stages:
                 # Default to waiting for provisioning and collecting diagnostics on failure in CI runs
                 $args += '-WaitForProvisioning','-ProvisioningTimeoutMinutes','40','-CollectDiagnosticsOnFailure'
                 if ($auto) { $args += '-AutoApprove' }
-                $delete = [bool]('$(DeleteCluster)')
                 if ($delete) { $args += '-DeleteCluster' }
 
                   Write-Host "Invoking Windows PowerShell with arguments: $($args -join ' ')"
@@ -83,6 +84,8 @@ stages:
                 }
 
           - task: PowerShell@2
+            # Skip upload if this is a delete run
+            condition: and(succeeded(), ne(variables['DeleteCluster'], 'true'))
             displayName: "Upload kubeconfig to Azure DevOps secure files"
             inputs:
               targetType: "inline"

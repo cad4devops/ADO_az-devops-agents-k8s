@@ -58,10 +58,28 @@ Kubernetes + containers give you:
 
 This repository now includes a single-entry orchestrator script `bootstrap-and-build.ps1` that performs an end-to-end onboarding flow: deploy infra (Bicep), build & push agent images, render pipeline templates, and provision Azure DevOps resources (variable group, secure file, and required pipelines). See `docs/bootstrap-and-build.md` for full usage and examples.
 
+Recent enhancements (2025-10):
+
+* Added `-SkipContainerRegistry` logic (implicit when `-ContainerRegistryName` is supplied) so existing ACR instances can be reused without attempting creation. Token `__SKIP_CONTAINER_REGISTRY__` is rendered into pipeline templates as `True`/`False` based on this detection.
+* Post-provision verification now fails fast if required ACR credential variables (`ACR_USERNAME`, `ACR_PASSWORD`) are missing from the Azure DevOps variable group after running the ACR creds helper.
+* Hardened variable-group JSON parsing (supports multiple `az` CLI / extension return shapes) to reduce false negatives in verification.
+* Added explicit parameter for `-SkipContainerRegistry` to the orchestrator to avoid referencing undeclared variables when rendering templates.
+* Normalized ACR short/FQDN handling and exports both as pipeline variables (`ACR_NAME`, `ACR_FQDN`).
+* Windows & Linux build steps now switch Docker Desktop engine automatically (when on Windows) and fall back gracefully if the Docker CLI helper is not present.
+
+Related local infrastructure helper improvements: `infra/scripts/AzureLocal/Manage-AksHci-WorkloadCluster.ps1` now provides:
+
+* Safer deletion logic (detects support for `-Force` / `-Confirm` before using).
+* Node pool existence/scale reconciliation with graceful fallbacks when module cmdlets differ by version.
+* Optional wait for provisioning state (`-WaitForProvisioning`) with timeout + diagnostic collection on failure.
+* Automated kubeconfig secure-file upload to Azure DevOps (REST fallback) when provided with PAT and project identifiers.
+* Dynamic next pool number detection (parses existing pool names / Hyper-V VM names) to avoid collisions.
+* Defensive module capability probing (works across differing AKS-HCI PowerShell module versions without hard failures).
+
 ---
 
 ## Architecture Overview <a id="architecture"></a>
-```
+```text
 Azure DevOps            KEDA (optional)        Kubernetes Cluster
 -------------           ---------------        ------------------
  Pipelines  ─────┐      Watch Queue Length --> ScaledObject (KEDA)
@@ -82,7 +100,7 @@ Core building blocks:
 ---
 
 ## Repository Structure <a id="repository-structure"></a>
-```
+```text
 azsh-linux-agent/        # Linux agent image + helper scripts
 azsh-windows-agent/      # Windows agent image + helper scripts
 dind/                    # Docker-in-Docker (Sysbox) variant
@@ -113,11 +131,12 @@ Chart (v1): `helm-charts/az-selfhosted-agents` — legacy layout
 Chart (v2, recommended): `helm-charts-v2/` — consolidated v2 chart with per-OS subcharts, better values composition, and CI helpers. See `helm-charts-v2/README.md` for full details.
 
 Key templates (v2 example):
-- `linux-deploy.yaml`
-- `windows-deploy.yaml`
-- `dind-deploy.yaml`
-- `secret.yaml`
-- `keda-scaledobject.yaml` (rendered when autoscaling.keda.enabled=true)
+
+* `linux-deploy.yaml`
+* `windows-deploy.yaml`
+* `dind-deploy.yaml`
+* `secret.yaml`
+* `keda-scaledobject.yaml` (rendered when autoscaling.keda.enabled=true)
 
 Supports enabling each pool independently via values.
 

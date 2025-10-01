@@ -39,6 +39,8 @@ Key parameters
 - `-InstanceNumber` (required): short identifier used to create resource names (RG, AKS, ACR defaults).
 - `-Location` (required): Azure location for infra deployment (when running deploy step).
 - `-ContainerRegistryName` (optional): when present, uses this ACR and skips discovery.
+- `-SkipContainerRegistry` (optional): explicit switch to skip creation when reusing an existing ACR. (Automatically implied if `-ContainerRegistryName` is provided.)
+- `-SkipContainerRegistry` (optional switch): explicitly signal to skip ACR creation. This is implied automatically whenever `-ContainerRegistryName` is supplied. The orchestrator renders `__SKIP_CONTAINER_REGISTRY__` token values in pipeline templates as `True` or `False` accordingly.
 - `-EnableWindows` (switch): enable Windows images and builds.
 - `-KubeconfigAzureLocalPath` / `-KubeContextAzureLocal`: used when uploading a kubeconfig as a secure file for local-mode pipelines.
 - `-AzureDevOpsOrgUrl`, `-AzureDevOpsProject`, `-AzureDevOpsRepo`: used by the provisioning helper when creating/updating pipelines.
@@ -60,6 +62,12 @@ What it provisions
 Behavioral notes & safety
 
 - The script captures and parses deploy output to pick up named outputs (for example `containerRegistryName`) but falls back to discovery heuristics when outputs are not present.
+- When `-ContainerRegistryName` is specified the orchestrator forwards `-SkipContainerRegistry` to the infra deploy helper / Bicep template (param `skipContainerRegistry`) to avoid attempting to recreate an existing registry.
+- After running the ACR credential helper the script performs a verification pass (only if a PAT env var is present) that fails fast if `ACR_USERNAME` or `ACR_PASSWORD` are absent from the variable group.
+- Docker Desktop engine switching is attempted automatically on Windows (Linux build → linux engine, Windows build → windows engine) but degrades gracefully if DockerCli.exe is not found.
+- Variable group JSON parsing is defensive and supports differing az CLI / extension return shapes (array, `variables` map, or flat object).
+- If an explicit `-ContainerRegistryName` is provided the deploy helper is invoked with `-SkipContainerRegistry` so the Bicep template will not attempt to create an ACR. (Bicep template exposes `skipContainerRegistry` parameter.)
+- After attempting to add ACR credentials to the Azure DevOps variable group, the orchestrator now performs a verification step (only when PAT present) to ensure `ACR_USERNAME` and `ACR_PASSWORD` exist; failure aborts early so dependent pipelines fail fast.
 - The Azure DevOps provisioning helper prefers environment variable `AZDO_PAT` for non-interactive runs. If not provided it will request a PAT interactively.
 - Secure-file upload uses a helper that will delete an existing secure-file with the same name and re-upload the provided kubeconfig.
 - Pipeline create/update uses the az CLI where possible; the helper omits brittle flags (like `--repository-type`) to remain compatible across extension versions.
@@ -72,13 +80,25 @@ Next steps and customization
 
 - Make the provisioning helper fatal on failure: the orchestrator currently treats provisioning helper failures as warnings by default; CI workflows can be tightened to fail the job if provisioning doesn't succeed.
 - Add az-devops extension version detection to choose the most compatible pipeline creation/update method automatically.
+- Add registry existence preflight when skipping ACR creation (planned) to emit a clearer error if a supplied registry name does not exist.
 
 Support & troubleshooting
 
 - If pipeline create/update fails due to az CLI extension differences, re-run with `AZDO_PAT` set and inspect the helper output. The helper prints `az` stdout/stderr when commands fail to aid diagnosis.
 - For secure-file upload failures, ensure the PAT has `Manage` permissions on secure files or use the helper's REST fallback which requires a PAT with secure-files write permissions.
+- If the orchestrator fails with "Variable group ... is missing required ACR variables" re-run the ACR credentials helper manually (`.azuredevops/scripts/add-acr-creds-to-variablegroup.ps1`) or verify PAT scopes include Variable Groups (Read, Manage). Secret values appear as null in CLI listing—presence, not value content, is what the verification checks.
 
 Related docs
+## Recent enhancements (2025-10)
+
+| Area | Change | Benefit |
+|------|--------|---------|
+| Registry reuse | `-SkipContainerRegistry` + implicit when `-ContainerRegistryName` present | Clean reuse of existing ACR without template edits |
+| Credential assurance | Post-helper verification of `ACR_USERNAME` / `ACR_PASSWORD` | Early, clear failure instead of latent pipeline errors |
+| Robust parsing | Multi-shape variable-group JSON handling | Resilient across az CLI / extension versions |
+| Docker engine mgmt | Automatic engine switching on Windows hosts | Reduces manual Docker Desktop interaction |
+| Token rendering | `__SKIP_CONTAINER_REGISTRY__` token now deterministic | Pipelines can branch on registry creation logic |
+
 
 - `docs/deploy-selfhosted-agents.md` — details the Helm deploy flow used by the deploy helper.
 - `docs/weekly-agent-pipeline.md` — explains the weekly images refresh pipeline referenced by the orchestrator.
