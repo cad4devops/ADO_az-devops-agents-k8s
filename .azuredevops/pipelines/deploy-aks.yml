@@ -8,17 +8,17 @@ pr: none
 parameters:
   - name: AZURE_SERVICE_CONNECTION
     type: string
-    default: "ADO_SvcConnRgScopedProd"
+    default: "DOS_DevOpsShield_Prod"
     values:
-      - "ADO_SvcConnRgScopedProd"
+      - "DOS_DevOpsShield_Prod"
   - name: ACR_NAME
     type: string
-    default: "cragents0036o3yuvhlr3ygc"
+    default: "devopsabcsrunners"
     values:
-      - "cragents0036o3yuvhlr3ygc"
+      - "devopsabcsrunners"
   - name: SkipContainerRegistry
     type: boolean
-    default: False
+    default: True
   - name: InstanceNumber
     type: string
     default: "003"

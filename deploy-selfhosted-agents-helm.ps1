@@ -352,10 +352,10 @@ function Ensure-Pool([string]$orgUrl, [string]$pat, [string]$poolName, [string]$
         try {
             $createPoolUri = "$orgUrl/_apis/distributedtask/pools?api-version=$apiVersion"
             $poolBody = @{
-                name = $poolName
+                name          = $poolName
                 autoProvision = $false  # This makes it project-scoped
-                autoSize = $false
-                isHosted = $false
+                autoSize      = $false
+                isHosted      = $false
             } | ConvertTo-Json -Compress
             
             $createdPool = Invoke-RestMethod -Method Post -Uri $createPoolUri `
@@ -367,27 +367,65 @@ function Ensure-Pool([string]$orgUrl, [string]$pat, [string]$poolName, [string]$
             Write-Host "Created pool '$poolName' with id=$poolId (autoProvision=false)"
         }
         catch {
-            Write-Warning "Failed to create pool: $($_.Exception.Message)"
-            throw
+            # Check if this is a 409 Conflict (pool already exists)
+            $statusCode = $null
+            if ($_.Exception.Response) {
+                $statusCode = [int]$_.Exception.Response.StatusCode
+            }
+            
+            if ($statusCode -eq 409) {
+                Write-Host "Pool '$poolName' already exists at organization level (409 Conflict); querying to get pool ID"
+                # Query organization-level pools to get the existing pool ID
+                try {
+                    $getPoolUri = "$orgUrl/_apis/distributedtask/pools?poolName=$([Uri]::EscapeDataString($poolName))&api-version=$apiVersion"
+                    $resp = Invoke-RestMethod -Method Get -Uri $getPoolUri -Headers $headers -ErrorAction Stop
+                    if ($resp.count -gt 0) {
+                        $poolId = $resp.value[0].id
+                        Write-Host "Found existing pool '$poolName' with id=$poolId"
+                    }
+                    else {
+                        Write-Warning "Pool exists (409) but query returned no results; this shouldn't happen"
+                        throw
+                    }
+                }
+                catch {
+                    Write-Warning "Failed to query existing pool after 409: $($_.Exception.Message)"
+                    throw
+                }
+            }
+            else {
+                Write-Warning "Failed to create pool: $($_.Exception.Message)"
+                throw
+            }
         }
         
-        # Now create the queue in the project to link it
+        # Now create the queue in the project to link it (check if it already exists first)
         try {
-            $queueBody = @{
-                name = $poolName
-                pool = @{ id = $poolId }
-            } | ConvertTo-Json -Compress
+            # Re-check if queue already exists (may have been created manually or in another run)
+            $queueCheckUri = "$orgUrl/$projectId/_apis/distributedtask/queues?api-version=$apiVersion"
+            $queues = Invoke-RestMethod -Method Get -Uri $queueCheckUri -Headers $headers -ErrorAction Stop
+            $existingQueue = $queues.value | Where-Object { $_.pool.id -eq $poolId }
             
-            $createQueueUri = "$orgUrl/$projectId/_apis/distributedtask/queues?api-version=$apiVersion"
-            $queue = Invoke-RestMethod -Method Post -Uri $createQueueUri `
-                -Headers ($headers + @{ 'Content-Type' = 'application/json' }) `
-                -Body $queueBody `
-                -ErrorAction Stop
-            
-            Write-Host "Created project-scoped queue for pool '$poolName' (queue id=$($queue.id))"
+            if ($existingQueue) {
+                Write-Host "Project queue for pool '$poolName' already exists (queue id=$($existingQueue.id))"
+            }
+            else {
+                $queueBody = @{
+                    name = $poolName
+                    pool = @{ id = $poolId }
+                } | ConvertTo-Json -Compress
+                
+                $createQueueUri = "$orgUrl/$projectId/_apis/distributedtask/queues?api-version=$apiVersion"
+                $queue = Invoke-RestMethod -Method Post -Uri $createQueueUri `
+                    -Headers ($headers + @{ 'Content-Type' = 'application/json' }) `
+                    -Body $queueBody `
+                    -ErrorAction Stop
+                
+                Write-Host "Created project-scoped queue for pool '$poolName' (queue id=$($queue.id))"
+            }
         }
         catch {
-            Write-Warning "Created pool but failed to create queue in project: $($_.Exception.Message)"
+            Write-Warning "Pool exists but failed to create/verify queue in project: $($_.Exception.Message)"
             # Pool exists but not linked - caller may need to manually link
         }
         
@@ -554,46 +592,108 @@ if ($orgUrl -and $effectiveAzDoToken) {
     $yamlLines += ('    AZP_URL_VALUE: ' + (QuoteYaml $orgUrl))
 }
 
+# Helper to mask PAT for safe logging (preserve first 4 + last 4 chars)
+function MaskPat([string]$pat) {
+    if (-not $pat) { return '(empty)' }
+    if ($pat.Length -le 8) { return '****' }
+    $mid = -join (1..($pat.Length - 8) | ForEach-Object { '*' })
+    return $pat.Substring(0, 4) + $mid + $pat.Substring($pat.Length - 4)
+}
+
 # If we have AzDO info available (via token or env AZDO_PAT) try to resolve pool IDs for KEDA ScaledObject triggers
-$patForPools = if ($AzDevOpsToken) { $AzDevOpsToken } elseif ($env:AZDO_PAT) { $env:AZDO_PAT } else { $null }
+# Priority: -AzDevOpsToken parameter > AZDO_PAT env var > effectiveAzDoToken (which includes fallback logic)
+$patForPools = $null
+if ($AzDevOpsToken -and -not [string]::IsNullOrWhiteSpace($AzDevOpsToken)) {
+    $patForPools = $AzDevOpsToken
+    Write-Host "Using PAT from -AzDevOpsToken parameter"
+}
+elseif ($env:AZDO_PAT -and -not [string]::IsNullOrWhiteSpace($env:AZDO_PAT)) {
+    $patForPools = $env:AZDO_PAT
+    Write-Host "Using PAT from AZDO_PAT environment variable"
+}
+elseif ($effectiveAzDoToken -and -not [string]::IsNullOrWhiteSpace($effectiveAzDoToken)) {
+    $patForPools = $effectiveAzDoToken
+    Write-Host "Using PAT from effectiveAzDoToken (fallback)"
+}
+
+# Fail early if AZDO_PAT is not present
+if (-not $patForPools -or [string]::IsNullOrWhiteSpace($patForPools)) {
+    Fail "AZDO_PAT (or AzDevOpsToken parameter) is required to resolve Azure DevOps pool IDs for KEDA autoscaling. Set AZDO_PAT environment variable or pass -AzDevOpsToken parameter before running this script."
+}
+
+# Fail early if PAT is the default placeholder value
+if ($patForPools -eq 'your-pat-token-here' -or $patForPools -match '^your-pat-token') {
+    Fail "AZDO_PAT contains the default placeholder value 'your-pat-token-here'. Please set a valid Azure DevOps Personal Access Token in the AZDO_PAT environment variable or pass it via -AzDevOpsToken parameter."
+}
+
+# Debug output with masked PAT - show which source was used
+Write-Host "PAT token finally resolved (masked): $(MaskPat $patForPools)"
+
 if ($patForPools -and $orgUrl) {
     # Initialize pool ID variables so referencing them is safe under StrictMode
     $linuxPoolId = $null
     $windowsPoolId = $null
+    $resolveErrors = @()
+    
     try {
         Write-Host "Resolving Azure DevOps pool IDs for pool names: linux='$poolLinux' windows='$poolWindows'"
         $authHeader = 'Basic ' + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(':' + $patForPools))
         $headers = @{ Authorization = $authHeader }
+        
         # Query pools by name; use the distributedtask/pools endpoint
-        if ($poolLinux) {
-            $q = "$orgUrl/_apis/distributedtask/pools?poolName=$([Uri]::EscapeDataString($poolLinux))&api-version=7.1-preview.1"
-            $resp = Invoke-RestMethod -Method Get -Uri $q -Headers $headers -ErrorAction Stop
-            if ($resp.count -gt 0) { $linuxPoolId = $resp.value[0].id }
+        if ($poolLinux -and $DeployLinux.IsPresent) {
+            try {
+                $q = "$orgUrl/_apis/distributedtask/pools?poolName=$([Uri]::EscapeDataString($poolLinux))&api-version=7.1-preview.1"
+                $resp = Invoke-RestMethod -Method Get -Uri $q -Headers $headers -ErrorAction Stop
+                if ($resp.count -gt 0) { 
+                    $linuxPoolId = $resp.value[0].id 
+                    Write-Host "Resolved Linux pool '$poolLinux' to ID: $linuxPoolId"
+                }
+                else { 
+                    $resolveErrors += "Linux pool '$poolLinux' not found in Azure DevOps"
+                }
+            }
+            catch {
+                $resolveErrors += "Failed to query Linux pool '$poolLinux': $($_.Exception.Message)"
+            }
         }
-        if ($poolWindows) {
-            $q = "$orgUrl/_apis/distributedtask/pools?poolName=$([Uri]::EscapeDataString($poolWindows))&api-version=7.1-preview.1"
-            $resp = Invoke-RestMethod -Method Get -Uri $q -Headers $headers -ErrorAction Stop
-            if ($resp.count -gt 0) { $windowsPoolId = $resp.value[0].id }
+        
+        if ($poolWindows -and $DeployWindows.IsPresent) {
+            try {
+                $q = "$orgUrl/_apis/distributedtask/pools?poolName=$([Uri]::EscapeDataString($poolWindows))&api-version=7.1-preview.1"
+                $resp = Invoke-RestMethod -Method Get -Uri $q -Headers $headers -ErrorAction Stop
+                if ($resp.count -gt 0) { 
+                    $windowsPoolId = $resp.value[0].id 
+                    Write-Host "Resolved Windows pool '$poolWindows' to ID: $windowsPoolId"
+                }
+                else { 
+                    $resolveErrors += "Windows pool '$poolWindows' not found in Azure DevOps"
+                }
+            }
+            catch {
+                $resolveErrors += "Failed to query Windows pool '$poolWindows': $($_.Exception.Message)"
+            }
         }
-        # Emit poolID section -- empty strings when unresolved
+        
+        # Fail early if any enabled platform's pool ID could not be resolved
+        if ($resolveErrors.Count -gt 0) {
+            Write-Error "Pool ID resolution failed:"
+            $resolveErrors | ForEach-Object { Write-Error "  - $_" }
+            Fail "Cannot proceed without valid pool IDs for KEDA ScaledObject. Ensure the agent pools exist in Azure DevOps and AZDO_PAT has permission to query them."
+        }
+        
+        # Emit poolID section with resolved IDs
         $yamlLines += 'poolID:'
         if ($linuxPoolId) { $yamlLines += ('  linux: ' + $linuxPoolId) } else { $yamlLines += '  linux: ""' }
         if ($windowsPoolId) { $yamlLines += ('  windows: ' + $windowsPoolId) } else { $yamlLines += '  windows: ""' }
-        Write-Host "Resolved pool IDs: linux=$linuxPoolId windows=$windowsPoolId"
+        Write-Host "Successfully resolved pool IDs: linux=$linuxPoolId windows=$windowsPoolId"
     }
     catch {
-        Write-Warning "Failed to resolve pool IDs from Azure DevOps: $($_.Exception.Message)"
-        # still emit empty poolID keys to avoid template errors
-        $yamlLines += 'poolID:'
-        $yamlLines += '  linux: ""'
-        $yamlLines += '  windows: ""'
+        Fail "Failed to resolve pool IDs from Azure DevOps: $($_.Exception.Message)"
     }
 }
 else {
-    # No AzDO credentials; emit empty poolID entries so the chart compiles but KEDA won't be functional until set
-    $yamlLines += 'poolID:'
-    $yamlLines += '  linux: ""'
-    $yamlLines += '  windows: ""'
+    Fail "Azure DevOps org URL or PAT is missing. Cannot resolve pool IDs for KEDA autoscaling."
 }
 
 $tmpDir = $null

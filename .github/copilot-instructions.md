@@ -67,6 +67,8 @@ Known issues and how they were addressed
 - PowerShell parser errors with ${var}: constructs: double-quoted strings containing `${name}:...` can cause parser errors on Windows agents. Fix: use `-f` formatting or avoid embedding colon after ${...} in double-quotes.
 - Push authentication failures ("unauthorized: access token has insufficient scopes"): typically means the pipeline service principal lacks `AcrPush` role on the ACR. Fix: grant `AcrPush` to the service principal used by the Azure DevOps service connection.
 - PublishBuildArtifacts error: Not found PathtoPublish when manifests were absent. Fix: Summary job sets `HAS_MANIFESTS` as a lowercase `'true'`/`'false'` string and Publish manifests runs only when `HAS_MANIFESTS == 'true'`.
+- KEDA ScaledObject failure ("error parsing azure Pipelines metadata: no poolName or poolID given"): Helm chart templates now conditionally render KEDA ScaledObjects only when valid poolID values are present (not empty, not placeholder "x"/"y"). The deploy script attempts to resolve pool IDs from Azure DevOps API when AZDO_PAT is available; if resolution fails or credentials are absent, KEDA autoscaling is gracefully disabled and agents run with fixed replica count.
+- Agent pool creation 409 Conflict: When creating project-scoped pools, the script may encounter "Agent pool X already exists" if the pool exists at organization level. Fix: deploy script now catches 409 errors, queries the existing pool to get its ID, and re-checks if the project queue already exists before attempting to create it.
 
 Pipeline notes
 --------------
@@ -92,6 +94,8 @@ Troubleshooting checklist (CI failures)
 - If pushes fail with insufficient scopes -> check service principal permissions; assign `AcrPush` to service principal for the ACR resource.
 - If PublishBuildArtifacts fails with Not found PathtoPublish -> inspect `HAS_MANIFESTS` variable (Summary job) and ensure the Publish step is gated on it; the pipeline already sets it to `'true'`/`'false'.`
 - If PowerShell parser errors reference `${var}:` -> convert the message/interpolation to use `-f` formatting or `${var}` braced names prior to colon.
+- If KEDA ScaledObject fails with "no poolName or poolID given" -> The deploy script now fails early if AZDO_PAT is not set or pool IDs cannot be resolved. Ensure AZDO_PAT is set when running deploy-selfhosted-agents-helm.ps1 so the script can query Azure DevOps API to resolve pool IDs; verify the agent pools exist in Azure DevOps before running the deployment; check the script output for masked PAT debug info. ScaledObjects are now conditional and will be skipped when poolID is invalid (though the script will fail before rendering if pools cannot be resolved).
+- If agent pool creation fails with 409 "Agent pool X already exists" -> The pool likely exists at organization level but the script is trying to create a project-scoped version. The deploy script now handles this by catching the 409 error, querying to get the existing pool ID, and checking if a project queue needs to be created to link the pool to the project.
 
 Testing & CI hygiene
 ---------------------

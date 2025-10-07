@@ -409,7 +409,11 @@ kubectl apply -f keda/linux/azure-pipelines-scaledobject.yaml
 | ------- | ----- | --- |
 | Pod CrashLoopBackOff | Wrong PAT / URL / pool | Check logs: `AZP URL/TOKEN invalid`. Regenerate PAT, verify base64. |
 | Agent stays offline in ADO | Network egress blocked | Ensure outbound https to dev.azure.com allowed. |
-| KEDA not scaling | Missing TriggerAuthentication or wrong poolID | Validate CRDs, run `kubectl describe scaledobject`. |
+| KEDA not scaling | Missing TriggerAuthentication or wrong poolID | Validate CRDs, run `kubectl describe scaledobject`. Check that poolID was resolved correctly. |
+| KEDA "no poolName or poolID given" | Invalid poolID (empty/placeholder) or missing AZDO_PAT | Ensure AZDO_PAT is set for pool ID resolution. ScaledObjects are now conditional and skip rendering when poolID is invalid. |
+| Agent pool 409 Conflict | Pool exists at org level but script creating project-scoped | Deploy script now auto-handles this by querying existing pool and linking to project. |
+| Helm "incompatible types for comparison" | Numeric poolID compared to string | Fixed in current templates - poolID converted to string before comparison. |
+| PAT placeholder error | Using 'your-pat-token-here' | Set actual PAT in AZDO_PAT env var. Scripts now detect and reject placeholder values. |
 | Windows deploy pending | No matching Windows nodes | Add Windows nodepool & tolerations if required. |
 | DinD build fails | RuntimeClass not found | Install Sysbox (`dind/02-Install-SysBox.ps1`). |
 

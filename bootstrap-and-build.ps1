@@ -26,7 +26,7 @@ param(
     [Parameter(Mandatory = $true)][string]$AzureDevOpsProject,
     [Parameter(Mandatory = $true)][string]$AzureDevOpsRepo,
     [Parameter(Mandatory = $false)][string]$ResourceGroupName,
-    [Parameter(Mandatory = $false)][string]$ContainerRegistryName,
+    [Parameter(Mandatory = $false)][string]$ContainerRegistryName = "devopsabcsrunners", # specify your container registry name or leave empty to create one
     [Parameter(Mandatory = $false)][switch]$BuildInPipeline,
     [Parameter(Mandatory = $false)][switch]$EnableWindows,
     [Parameter(Mandatory = $false)][int]$WindowsNodeCount = 1,
@@ -37,16 +37,16 @@ param(
     [Parameter(Mandatory = $false)][string]$BootstrapPoolName = 'KubernetesPoolWindows',
     [Parameter(Mandatory = $false)][string]$KubeconfigAzureLocalPath = "workload-cluster-$InstanceNumber-kubeconfig.yaml",
     [Parameter(Mandatory = $false)][string]$KubeContextAzureLocal = "workload-cluster-$InstanceNumber-admin@workload-cluster-$InstanceNumber",
-    [Parameter(Mandatory = $false)][string]$KubeConfigFilePath = "$HOME\.kube\workload-cluster-$InstanceNumber-kubeconfig.yaml",
-    [Parameter(Mandatory = $false)][string]$AzureDevOpsServiceConnectionName = 'ADO_SvcConnRgScopedProd',
-    [Parameter(Mandatory = $false)][string]$AzureDevOpsVariableGroup = "$AzureDevOpsProject-$InstanceNumber",
+    [Parameter(Mandatory = $false)][string]$KubeConfigFilePath = "${HOME}\.kube\workload-cluster-$InstanceNumber-kubeconfig.yaml",
+    [Parameter(Mandatory = $false)][string]$AzureDevOpsServiceConnectionName = 'DOS_DevOpsShield_Prod', # specify you ARM azure devops service connection name
+    [Parameter(Mandatory = $false)][string]$AzureDevOpsVariableGroup = "$AzureDevOpsRepo-$InstanceNumber",
     [Parameter(Mandatory = $false)][string]$AzureDevOpsPatTokenEnvironmentVariableName = "AZDO_PAT",
-    [Parameter(Mandatory = $false)][string]$InstallPipelineName = "$AzureDevOpsProject-deploy-self-hosted-agents-helm",
-    [Parameter(Mandatory = $false)][string]$UninstallPipelineName = "$AzureDevOpsProject-uninstall-selfhosted-agents-helm",
-    [Parameter(Mandatory = $false)][string]$ValidatePipelineName = "$AzureDevOpsProject-validate-self-hosted-agents-helm",
-    [Parameter(Mandatory = $false)][string]$ImageRefreshPipelineName = "$AzureDevOpsProject-weekly-image-refresh",
-    [Parameter(Mandatory = $false)][string]$RunOnPoolSamplePipelineName = "$AzureDevOpsProject-run-on-selfhosted-pool-sample-helm",
-    [Parameter(Mandatory = $false)][string]$DeployAksInfraPipelineName = "$AzureDevOpsProject-deploy-aks-helm",
+    [Parameter(Mandatory = $false)][string]$InstallPipelineName = "$AzureDevOpsRepo-deploy-self-hosted-agents-helm",
+    [Parameter(Mandatory = $false)][string]$UninstallPipelineName = "$AzureDevOpsRepo-uninstall-selfhosted-agents-helm",
+    [Parameter(Mandatory = $false)][string]$ValidatePipelineName = "$AzureDevOpsRepo-validate-self-hosted-agents-helm",
+    [Parameter(Mandatory = $false)][string]$ImageRefreshPipelineName = "$AzureDevOpsRepo-weekly-image-refresh",
+    [Parameter(Mandatory = $false)][string]$RunOnPoolSamplePipelineName = "$AzureDevOpsRepo-run-on-selfhosted-pool-sample-helm",
+    [Parameter(Mandatory = $false)][string]$DeployAksInfraPipelineName = "$AzureDevOpsRepo-deploy-aks-helm",
     [Parameter(Mandatory = $false)][string]$KubeConfigSecretFile = "AKS_workload-cluster-$InstanceNumber-kubeconfig_file"
 )
 
@@ -75,6 +75,19 @@ if (Test-Path $envFile) {
     }
 }
 
+# Helper functions (must be defined before use)
+function Fail([string]$msg) { Write-Error $msg; exit 1 }
+
+function Write-Green([string]$msg) { try { if ($IsWindows) { Write-Host -ForegroundColor Green $msg } else { Write-Host "`e[32m$msg`e[0m" } } catch { Write-Host $msg } }
+
+# Helper to mask PAT for safe logging (preserve first 4 + last 4 chars)
+function MaskPat([string]$pat) {
+    if (-not $pat) { return '(empty)' }
+    if ($pat.Length -le 8) { return '****' }
+    $mid = -join (1..($pat.Length - 8) | ForEach-Object { '*' })
+    return $pat.Substring(0, 4) + $mid + $pat.Substring($pat.Length - 4)
+}
+
 # Validate required environment variable
 if ([string]::IsNullOrWhiteSpace($env:AZDO_PAT)) {
     Write-Error @"
@@ -87,19 +100,35 @@ The Azure DevOps Personal Access Token (PAT) is required to create/update:
 
 Please set the AZDO_PAT environment variable before running this script:
 
-  `$env:AZDO_PAT = 'your-pat-token-here'
+  `$env:AZDO_PAT = 'your-actual-pat-token'
 
 Or create a .env file in the repository root with:
-  AZDO_PAT=your-pat-token-here
+  AZDO_PAT=your-actual-pat-token
 
 See docs/bootstrap-env.md for PAT scope requirements.
 "@
     exit 1
 }
 
-function Fail([string]$msg) { Write-Error $msg; exit 1 }
+# Validate PAT is not the default placeholder value
+if ($env:AZDO_PAT -eq 'your-pat-token-here' -or $env:AZDO_PAT -match '^your-pat-token' -or $env:AZDO_PAT -eq 'your-actual-pat-token') {
+    Write-Error @"
+ERROR: AZDO_PAT contains a placeholder value ('$($env:AZDO_PAT)').
 
-function Write-Green([string]$msg) { try { if ($IsWindows) { Write-Host -ForegroundColor Green $msg } else { Write-Host "`e[32m$msg`e[0m" } } catch { Write-Host $msg } }
+Please set a valid Azure DevOps Personal Access Token.
+The PAT must have the following scopes:
+  - Agent Pools (Read & manage)
+  - Build (Read & execute)
+  - Code (Read)
+  - Variable Groups (Read, create & manage)
+
+See docs/bootstrap-env.md for detailed PAT creation instructions.
+"@
+    exit 1
+}
+
+# Output masked PAT for debugging (safe to log)
+Write-Host "AZDO_PAT validation passed (masked): $(MaskPat $env:AZDO_PAT)"
 
 # Switch Docker Desktop engine between linux and windows on Windows hosts when available
 function Switch-DockerEngine([ValidateSet('linux', 'windows')][string]$target, [int]$timeoutSeconds = 60) {
@@ -302,6 +331,7 @@ foreach ($tpl in $pipelineTemplates) {
 $vgHelper = Join-Path $repoRoot 'scripts\create-variablegroup-and-pipelines.ps1'
 if (Test-Path $vgHelper) {
     Write-Host "Invoking variable-group & pipeline helper: $vgHelper"
+    Write-Host "Using AZDO_PAT (masked): $(MaskPat $env:AZDO_PAT)"
     try {
         $vgArgs = @(
             '-NoProfile', '-NonInteractive', '-File', $vgHelper,
@@ -345,6 +375,7 @@ else {
 $addAcrScript = Join-Path $repoRoot '.azuredevops\scripts\add-acr-creds-to-variablegroup-cli.ps1'
 if (Test-Path $addAcrScript) {
     Write-Host "Invoking add-acr-creds-to-variablegroup-cli helper: $addAcrScript"
+    Write-Host "Using AZDO_PAT (masked): $(MaskPat $env:AZDO_PAT) pushed as secret to Azure DevOps"
     $addArgs = @(
         '-AcrName', $acrShort,
         '-OrgUrl', $AzureDevOpsOrgUrl,
@@ -375,56 +406,56 @@ try {
         Write-Warning "Unable to list variable groups using az CLI; skipping ACR variable verification."
     }
     else {
-            $vgList = $null
-            try { $vgList = $vgListJson | ConvertFrom-Json -ErrorAction Stop } catch { $vgList = $null }
-            if (-not $vgList) { Write-Warning "Failed to parse variable groups list JSON; skipping verification." }
-            else {
-                $vg = $vgList | Where-Object { $_.name -eq $AzureDevOpsVariableGroup }
-                if (-not $vg) { Fail "Variable group '$AzureDevOpsVariableGroup' not found in project '$AzureDevOpsProject' (cannot verify ACR variables)." }
-                $vgId = $vg.id
-                Write-Host "Found variable group id=$vgId; listing variables..."
-                $varsJson = az pipelines variable-group variable list --id $vgId --org $AzureDevOpsOrgUrl --project $AzureDevOpsProject -o json 2>$null
-                if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($varsJson)) { Fail "Failed to list variables for variable group id=$vgId via az CLI." }
-                $vars = $null
-                try { $vars = $varsJson | ConvertFrom-Json -ErrorAction Stop } catch { $vars = $null }
-                if (-not $vars) { Fail "Failed to parse variables JSON for variable group id=$vgId." }
-                # Normalize several possible JSON shapes returned by different az/extension versions:
-                # 1) An array of { name: 'VAR', ... }
-                # 2) An object with a 'variables' map: { variables: { VAR: {...}, ... } }
-                # 3) A flat object where each property name is a variable name
-                $names = @()
-                try {
-                    if ($vars -is [System.Collections.IEnumerable] -and $vars.Count -gt 0 -and ($vars[0].PSObject.Properties.Name -contains 'name')) {
-                        # Shape 1: array of objects with 'name'
-                        $names = $vars | ForEach-Object { $_.name }
-                    }
-                    elseif ($vars -and $vars.PSObject.Properties.Match('variables').Count -gt 0) {
-                        # Shape 2: object with 'variables' map
-                        $map = $vars.variables
-                        if ($map) {
-                            # map is usually an object with properties named after variables
-                            $names = $map.PSObject.Properties | ForEach-Object { $_.Name }
-                        }
-                    }
-                    else {
-                        # Shape 3: treat top-level property names as variable names
-                        $names = $vars.PSObject.Properties | ForEach-Object { $_.Name }
-                    }
+        $vgList = $null
+        try { $vgList = $vgListJson | ConvertFrom-Json -ErrorAction Stop } catch { $vgList = $null }
+        if (-not $vgList) { Write-Warning "Failed to parse variable groups list JSON; skipping verification." }
+        else {
+            $vg = $vgList | Where-Object { $_.name -eq $AzureDevOpsVariableGroup }
+            if (-not $vg) { Fail "Variable group '$AzureDevOpsVariableGroup' not found in project '$AzureDevOpsProject' (cannot verify ACR variables)." }
+            $vgId = $vg.id
+            Write-Host "Found variable group id=$vgId; listing variables..."
+            $varsJson = az pipelines variable-group variable list --id $vgId --org $AzureDevOpsOrgUrl --project $AzureDevOpsProject -o json 2>$null
+            if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($varsJson)) { Fail "Failed to list variables for variable group id=$vgId via az CLI." }
+            $vars = $null
+            try { $vars = $varsJson | ConvertFrom-Json -ErrorAction Stop } catch { $vars = $null }
+            if (-not $vars) { Fail "Failed to parse variables JSON for variable group id=$vgId." }
+            # Normalize several possible JSON shapes returned by different az/extension versions:
+            # 1) An array of { name: 'VAR', ... }
+            # 2) An object with a 'variables' map: { variables: { VAR: {...}, ... } }
+            # 3) A flat object where each property name is a variable name
+            $names = @()
+            try {
+                if ($vars -is [System.Collections.IEnumerable] -and $vars.Count -gt 0 -and ($vars[0].PSObject.Properties.Name -contains 'name')) {
+                    # Shape 1: array of objects with 'name'
+                    $names = $vars | ForEach-Object { $_.name }
                 }
-                catch { $names = @() }
-                $hasUser = $names -contains 'ACR_USERNAME'
-                $hasPass = $names -contains 'ACR_PASSWORD'
-                if (-not $hasUser -or -not $hasPass) {
-                    $missing = @()
-                    if (-not $hasUser) { $missing += 'ACR_USERNAME' }
-                    if (-not $hasPass) { $missing += 'ACR_PASSWORD' }
-                    Fail (("Variable group '{0}' is missing required ACR variables. Present: {1}. Missing: {2}") -f $AzureDevOpsVariableGroup, ($names -join ', '), ($missing -join ', '))
+                elseif ($vars -and $vars.PSObject.Properties.Match('variables').Count -gt 0) {
+                    # Shape 2: object with 'variables' map
+                    $map = $vars.variables
+                    if ($map) {
+                        # map is usually an object with properties named after variables
+                        $names = $map.PSObject.Properties | ForEach-Object { $_.Name }
+                    }
                 }
                 else {
-                    Write-Host "Verified: ACR_USERNAME and ACR_PASSWORD exist in variable group (id=$vgId)."
+                    # Shape 3: treat top-level property names as variable names
+                    $names = $vars.PSObject.Properties | ForEach-Object { $_.Name }
                 }
             }
+            catch { $names = @() }
+            $hasUser = $names -contains 'ACR_USERNAME'
+            $hasPass = $names -contains 'ACR_PASSWORD'
+            if (-not $hasUser -or -not $hasPass) {
+                $missing = @()
+                if (-not $hasUser) { $missing += 'ACR_USERNAME' }
+                if (-not $hasPass) { $missing += 'ACR_PASSWORD' }
+                Fail (("Variable group '{0}' is missing required ACR variables. Present: {1}. Missing: {2}") -f $AzureDevOpsVariableGroup, ($names -join ', '), ($missing -join ', '))
+            }
+            else {
+                Write-Host "Verified: ACR_USERNAME and ACR_PASSWORD exist in variable group (id=$vgId)."
+            }
         }
+    }
 }
 catch {
     Fail ("ACR variable verification failed: {0}" -f $_.Exception.Message)

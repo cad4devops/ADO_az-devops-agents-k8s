@@ -132,8 +132,12 @@ pwsh ./deploy-selfhosted-agents-helm.ps1 -InstanceNumber 003 -AzureDevOpsOrgUrl 
 
 ## Troubleshooting
 
-- If KEDA ScaledObject shows an invalid `poolID`, inspect the generated `helm-values-override.yaml` artifact; it should contain numeric `poolID` fields when the resolver succeeds.
-- Pod CrashLoopBackOff often indicates malformed secret data (e.g., URL or token encoded incorrectly). Use `echo -n 'value' | base64` to generate values on Linux/macOS or use PowerShell `[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('value'))` on Windows.
+- **KEDA ScaledObject invalid poolID**: Inspect the generated `helm-values-override.yaml` artifact; it should contain numeric `poolID` fields when the resolver succeeds. The Helm templates now conditionally render ScaledObjects only when valid poolID values are present (not empty, not placeholder values).
+- **KEDA "no poolName or poolID given"**: Ensure AZDO_PAT environment variable is set when running the deploy script so pool IDs can be resolved from Azure DevOps API. The deploy script now fails early if AZDO_PAT is missing or contains placeholder values like 'your-pat-token-here'.
+- **Agent pool 409 Conflict**: If deployment fails with "Agent pool X already exists", the pool likely exists at organization level. The deploy script now automatically handles this by catching the 409 error, querying to get the existing pool ID, and checking if a project queue needs to be created.
+- **Helm type comparison errors**: If you see "error calling ne: incompatible types for comparison", ensure you're using the latest templates which convert poolID values to strings before comparison.
+- **Pod CrashLoopBackOff**: Often indicates malformed secret data (e.g., URL or token encoded incorrectly). Use `echo -n 'value' | base64` to generate values on Linux/macOS or use PowerShell `[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('value'))` on Windows.
+- **PAT validation**: Check the deploy script output for masked PAT (shows first 4 + last 4 characters) to verify which token was resolved. Script rejects common placeholder values.
 
 ## Contributing
 
