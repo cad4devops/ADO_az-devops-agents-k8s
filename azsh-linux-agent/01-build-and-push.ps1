@@ -15,7 +15,13 @@ param(
     # Default ACR short name (no .azurecr.io). Can be overridden by passing this parameter
     # or by setting the DEFAULT_ACR environment variable in CI.
     [Parameter(Mandatory = $true)]
-    [string]$DefaultAcr #'cragents003c66i4n7btfksg'
+    [string]$DefaultAcr, #'cragents003c66i4n7btfksg'
+    [Parameter(Mandatory = $false)]
+    [switch]$UsePrebaked = $true,
+    [Parameter(Mandatory = $false)]
+    [switch]$UseStandard,
+    [Parameter(Mandatory = $false)]
+    [string]$AgentVersion
 )
 
 $ErrorActionPreference = 'Stop'
@@ -45,12 +51,39 @@ if ($ContainerRegistryName -and ($ContainerRegistryName -notmatch '\.')) {
 if (-not $RepositoryName) { $RepositoryName = "linux-sh-agent-docker" }
 if (-not $BaseTag) { $BaseTag = "ubuntu-24.04" }
 
+# Determine build mode: UseStandard overrides default UsePrebaked
+if ($UseStandard) {
+    $UsePrebaked = $false
+    Write-Host "Using STANDARD agent Dockerfile (agent downloaded at runtime)" -ForegroundColor Yellow
+} elseif ($UsePrebaked) {
+    Write-Host "Using PRE-BAKED agent Dockerfile (agent downloaded at build time)" -ForegroundColor Magenta
+}
+
+# Fetch latest agent version if not specified
+if ($UsePrebaked -and -not $AgentVersion) {
+    try {
+        Write-Host "Fetching latest Azure DevOps Agent version..." -ForegroundColor Cyan
+        $latestRelease = Invoke-RestMethod -Uri "https://api.github.com/repos/microsoft/azure-pipelines-agent/releases/latest" -Headers @{ "User-Agent" = "PowerShell" }
+        $AgentVersion = $latestRelease.tag_name -replace '^v', ''
+        Write-Host "Latest agent version: $AgentVersion" -ForegroundColor Green
+    }
+    catch {
+        Write-Warning "Failed to fetch latest agent version, falling back to 4.261.0: $_"
+        $AgentVersion = "4.261.0"
+    }
+}
+
 # Compose final tag (e.g. ubuntu-24.04-20250920-a1b2c3d)
 $FinalTag = if ($TagSuffix) { "$BaseTag-$TagSuffix" } else { $BaseTag }
 
-$dockerFileName = "./Dockerfile.${RepositoryName}"
-
-Write-Host "Building image: $RepositoryName" -ForegroundColor Cyan
+# Choose Dockerfile based on prebaked flag
+if ($UsePrebaked) {
+    $dockerFileName = "./Dockerfile.${RepositoryName}.prebaked"
+    Write-Host "Building PREBAKED Linux image: $RepositoryName with agent v${AgentVersion}" -ForegroundColor Cyan
+} else {
+    $dockerFileName = "./Dockerfile.${RepositoryName}"
+    Write-Host "Building STANDARD Linux image: $RepositoryName" -ForegroundColor Cyan
+}
 Write-Host " Registry : $ContainerRegistryName"
 Write-Host " BaseTag  : $BaseTag"
 Write-Host " FinalTag : $FinalTag"
@@ -76,7 +109,14 @@ $tagParams = @()
 foreach ($t in $tags) { $tagParams += @('--tag', $t) }
 
 Write-Host "Running docker build with tags:`n  $($tags -join "`n  ")"
-docker build @tagParams --file "$dockerFileName" .
+
+# Build with agent version as build arg for prebaked images
+if ($UsePrebaked) {
+    Write-Host "Agent Version: $AgentVersion" -ForegroundColor Cyan
+    docker build @tagParams --build-arg AGENT_VERSION=$AgentVersion --file "$dockerFileName" .
+} else {
+    docker build @tagParams --file "$dockerFileName" .
+}
 
 $acrShort = $ContainerRegistryName.Split('.')[0]
 Write-Host "Logging into ACR: $acrShort"

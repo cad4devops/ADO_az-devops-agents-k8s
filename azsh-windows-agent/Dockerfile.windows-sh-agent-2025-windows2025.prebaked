@@ -1,0 +1,27 @@
+# Pre-baked Azure Pipelines Agent for Windows Server 2025
+FROM mcr.microsoft.com/windows/servercore:ltsc2025
+
+# Agent version as build argument (fetched dynamically by build script)
+ARG AGENT_VERSION=4.261.0
+
+WORKDIR /azp/
+
+# Pre-download the Azure Pipelines agent during build
+RUN powershell -Command " \
+    $ErrorActionPreference = 'Stop'; \
+    $ProgressPreference = 'SilentlyContinue'; \
+    $agentVersion = $env:AGENT_VERSION; \
+    Write-Host \"Downloading Azure Pipelines agent v${agentVersion}...\"; \
+    $downloadUrl = \"https://download.agent.dev.azure.com/agent/${agentVersion}/vsts-agent-win-x64-${agentVersion}.zip\"; \
+    Write-Host \"Download URL: $downloadUrl\"; \
+    Invoke-WebRequest -Uri $downloadUrl -OutFile 'C:\azp\agent.zip' -UseBasicParsing; \
+    Write-Host 'Extracting agent...'; \
+    New-Item -Path 'C:\azp\agent' -ItemType Directory -Force | Out-Null; \
+    Expand-Archive -Path 'C:\azp\agent.zip' -DestinationPath 'C:\azp\agent' -Force; \
+    Remove-Item 'C:\azp\agent.zip' -Force; \
+    Write-Host \"Agent v${agentVersion} ready.\"; \
+    "
+
+COPY ./start-prebaked.ps1 ./start.ps1
+
+CMD powershell .\start.ps1

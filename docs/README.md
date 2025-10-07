@@ -4,12 +4,13 @@ This folder contains user and operator documentation for deploying, validating, 
 
 - Top-level docs
 
-- `bootstrap-and-build.md` — Orchestrator to deploy infra, build images, and provision Azure DevOps (variable group, secure file, pipelines).
-- `deploy-selfhosted-agents.md` — Helm deployment pipeline and guidance.
-- `validate-selfhosted-agents.md` — Pipeline to validate agent registration and sample job runs.
-- `run-on-selfhosted-pool-sample.md` — Minimal sample pipeline showing how to target the self‑hosted pool.
-- `uninstall-selfhosted-agents.md` — Cleanup pipeline & steps to remove releases and secrets.
-- `weekly-agent-pipeline.md` — Details for the scheduled weekly image rebuild & push pipeline.
+- `bootstrap-and-build.md` — Orchestrator (infra + prebaked image build + pipeline provisioning)
+- `deploy-selfhosted-agents.md` — Helm deployment & update flow
+- `validate-selfhosted-agents.md` — Post‑deploy validation
+- `run-on-selfhosted-pool-sample.md` — Minimal usage example
+- `uninstall-selfhosted-agents.md` — Removal & cleanup
+- `weekly-agent-pipeline.md` — Scheduled weekly prebaked image refresh
+- `QUICK-COMMANDS.md` — Common build/deploy commands
 
 Note: `validate-selfhosted-agents.md` and `deploy-selfhosted-agents.md` now support a `useOnPremAgents` boolean pipeline parameter to toggle whether CI jobs run on the repository's on‑prem pool (for example `UbuntuLatestPoolOnPrem`) or use the hosted `ubuntu-latest` pool. This parameter is separate from `useAzureLocal`, which controls where kubeconfig is sourced from.
 
@@ -22,17 +23,15 @@ Subfolders
 
 - `self-hosted-agents/` — OS-specific setup and guidance (Windows/Linux). See the `setup/` pages for walkthroughs.
 
-Notes & recent updates
+Recent key updates (2025-10)
 
-- The repository includes `copilot-instructions.md` at the repo root with guidance for automated agents and contributors; follow its guidelines when editing scripts or pipelines.
-- The weekly images pipeline now runs per-version Windows jobs (2019/2022/2025) to enable parallel builds and determinism. Each job writes a per-job manifest under `manifests/windows-<version>-digest.txt`.
-- Temporary mock runners live in `.tmp/` to allow safe local dry-runs without network pushes. They are intended for developer convenience and should not be included in release PRs unless explicitly desired.
-- **Recent troubleshooting documentation updates (2025-10)**:
-  - Added guidance for agent pool 409 Conflict errors (pool exists at org level) - deploy script now handles automatically
-  - Added KEDA ScaledObject troubleshooting (invalid poolID, missing AZDO_PAT, type comparison errors)
-  - Added PAT validation documentation (placeholder detection, masked output, fail-fast behavior)
-  - Added Helm template type comparison error resolution
-  - See updated troubleshooting sections in `deploy-selfhosted-agents.md`, `bootstrap-and-build.md`, main `README.md`, and Helm chart `README.md`
+| Area | Change | Impact |
+|------|--------|--------|
+| Images | Prebaked agents now default (Linux + Windows) | < 1 min cold start |
+| Versioning | Dynamic agent version via GitHub releases | No manual bumps |
+| Download host | Switched to `download.agent.dev.azure.com` | Fixed legacy DNS failures |
+| Pipelines | Parallel per-version Windows builds | Faster refresh cadence |
+| Orchestrator | ACR reuse & skip flag improvements | Idempotent reruns |
 
 How to contribute updates to docs
 
@@ -48,7 +47,7 @@ Quick docs change checklist
     pwsh -NoProfile -Command "[void]([System.Management.Automation.Language.Parser]::ParseFile('path\to\script.ps1',[ref]$null,[ref]$null)); Write-Host 'Syntax OK'"
     ```
 
-- (Optional) Run the mock runners locally to validate tag formation and push targets:
+- (Optional) Run mock runners (if present) to validate tag formation and push targets:
 
     ```powershell
     pwsh -NoProfile -File .\.tmp\run-mock-linux-build.ps1

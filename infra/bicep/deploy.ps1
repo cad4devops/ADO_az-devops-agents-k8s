@@ -19,6 +19,8 @@ param(
     [Parameter(Mandatory = $false)] [bool] $EnableWindows = $true,
     [Parameter(Mandatory = $false)] [int] $WindowsNodeCount = 1,
     [Parameter(Mandatory = $false)] [int] $LinuxNodeCount = 1,
+    [Parameter(Mandatory = $false)] [string] $LinuxVmSize = 'Standard_D4s_v3',
+    [Parameter(Mandatory = $false)] [string] $WindowsVmSize = 'Standard_D2s_v3',
     [Parameter(Mandatory = $false)] [string] $WindowsAdminUsername,
     [Parameter(Mandatory = $false)] [SecureString] $WindowsAdminPassword,
     [Parameter(Mandatory = $false)] [string] $KeyVaultName,
@@ -177,6 +179,8 @@ $paramArgs = @(
     "enableWindows=$enableWindowsStr"
     "windowsNodeCount=$WindowsNodeCount"
     "linuxNodeCount=$LinuxNodeCount"
+    "linuxVmSize=$LinuxVmSize"
+    "windowsVmSize=$WindowsVmSize"
     "skipAks=$skipAksStr"
 )
 
