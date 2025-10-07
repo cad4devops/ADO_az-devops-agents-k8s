@@ -17,17 +17,17 @@ parameters:
     default: "docker"
   - name: AZURE_SERVICE_CONNECTION
     type: string
-    default: "ADO_SvcConnRgScopedProd"
+    default: "DOS_DevOpsShield_Prod"
     values:
-      - "ADO_SvcConnRgScopedProd"
+      - "DOS_DevOpsShield_Prod"
   - name: ACR_NAME
     type: string
-    default: "cragents0036o3yuvhlr3ygc"
+    default: "devopsabcsrunners"
     values:
-      - "cragents0036o3yuvhlr3ygc"
+      - "devopsabcsrunners"
   - name: attachAcr
     type: boolean
-    default: true
+    default: false
   - name: skipLinux
     type: boolean
     default: false
@@ -42,7 +42,7 @@ parameters:
     default: "aks-ado-agents-003"
   - name: azureDevOpsOrgUrl
     type: string
-    default: "https://dev.azure.com/devops-halo"
+    default: "https://dev.azure.com/cad4devops"
   - name: instanceNumber
     type: string
     default: "003"
@@ -77,7 +77,7 @@ parameters:
     default: true # Set to true to use on-premises agents, false to use cloud agents
 
 variables:
-  - group: "DevOpsAgentswithK8S-003" # to get AZDO_PAT
+  - group: "ADO_az-devops-agents-k8s-003" # to get AZDO_PAT
   - name: azureSubscription
     value: ${{ parameters.AZURE_SERVICE_CONNECTION }}
 
@@ -728,4 +728,3 @@ stages:
               targetPath: "$(System.DefaultWorkingDirectory)/helm-applied-values.yaml"
               artifact: helm-applied-values
             condition: and(succeeded(), eq(variables['HelmAppliedValuesExists'], 'true'))
-

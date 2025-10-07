@@ -1,9 +1,9 @@
 Param (
-    [Parameter(Mandatory=$true)][string]$PAT,
-    [Parameter(Mandatory=$true)][string]$AzureDevOpsOrg,
-    [Parameter(Mandatory=$true)][string]$AzureDevOpsProjectID,
-    [Parameter(Mandatory=$true)][string]$SecureNameFile2Upload,
-    [Parameter(Mandatory=$true)][string]$SecureNameFilePath2Upload
+    [Parameter(Mandatory = $true)][string]$PAT,
+    [Parameter(Mandatory = $true)][string]$AzureDevOpsOrg,
+    [Parameter(Mandatory = $true)][string]$AzureDevOpsProjectID,
+    [Parameter(Mandatory = $true)][string]$SecureNameFile2Upload,
+    [Parameter(Mandatory = $true)][string]$SecureNameFilePath2Upload
 )
 
 Set-StrictMode -Version Latest
@@ -35,8 +35,27 @@ try {
     $listUri = "$projectUrl/_apis/distributedtask/securefiles?api-version=7.1-preview.1"
     $listResp = Invoke-RestMethod -Uri $listUri -Method Get -Headers $headers -ErrorAction Stop
     $existing = $null
-    if ($listResp -and $listResp.value) {
-        $existing = $listResp.value | Where-Object { $_.name -eq $SecureNameFile2Upload } | Select-Object -First 1
+    
+    # Defensive parsing: handle different response shapes
+    # Shape 1: { value: [...] } — standard REST response
+    # Shape 2: [...] — direct array
+    # Shape 3: empty or null
+    $secureFiles = @()
+    if ($listResp) {
+        if ($listResp.PSObject.Properties.Name -contains 'value') {
+            # Standard shape with .value array
+            if ($listResp.value -is [System.Collections.IEnumerable]) {
+                $secureFiles = @($listResp.value)
+            }
+        }
+        elseif ($listResp -is [System.Collections.IEnumerable]) {
+            # Direct array
+            $secureFiles = @($listResp)
+        }
+    }
+    
+    if ($secureFiles.Count -gt 0) {
+        $existing = $secureFiles | Where-Object { $_.name -eq $SecureNameFile2Upload } | Select-Object -First 1
     }
 
     if ($existing) {
@@ -64,13 +83,22 @@ try {
 }
 catch {
     Write-Err ("Operation failed: {0}" -f $_.Exception.Message)
-    if ($_.Exception.Response -and ($_.Exception.Response -is [System.Net.HttpWebResponse])) {
-        try {
-            $sr = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
-            $body = $sr.ReadToEnd(); $sr.Close()
-            Write-Host "Response body: $body"
+    
+    # Defensive error response handling
+    try {
+        if ($_.Exception.PSObject.Properties.Name -contains 'Response') {
+            $httpResp = $_.Exception.Response
+            if ($httpResp -and ($httpResp -is [System.Net.HttpWebResponse])) {
+                $sr = New-Object System.IO.StreamReader($httpResp.GetResponseStream())
+                $body = $sr.ReadToEnd()
+                $sr.Close()
+                Write-Host "Response body: $body"
+            }
         }
-        catch { }
     }
+    catch {
+        # Silently ignore errors when reading response body
+    }
+    
     exit 4
 }

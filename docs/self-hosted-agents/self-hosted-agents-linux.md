@@ -40,6 +40,9 @@ Troubleshooting
 
 - Check `kubectl logs <pod>` in the target namespace for registration errors.
 - Verify the secret contains the correct base64-encoded `AZP_TOKEN` and `AZP_URL`.
+- **KEDA ScaledObject issues**: If KEDA fails with "no poolName or poolID given", ensure AZDO_PAT is set when running the deploy script so pool IDs can be resolved from Azure DevOps API. The Helm templates now conditionally render ScaledObjects only when valid poolID values are present.
+- **Agent pool 409 Conflict**: If you see "Agent pool X already exists" during deployment, the pool likely exists at organization level. The deploy script now handles this automatically by querying the existing pool and linking it to the project.
+- For more troubleshooting guidance, see `docs/deploy-selfhosted-agents.md` and `.github/copilot-instructions.md`.
 
 Appendix: manual agent install (legacy)
 

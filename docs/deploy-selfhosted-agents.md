@@ -59,6 +59,10 @@ Troubleshooting
 
 - If pods crash on startup, check `kubectl logs` for missing AZP_TOKEN or invalid AZP_URL.
 - If Helm fails, validate chart values and permissions in the target namespace.
+- **Agent pool creation 409 Conflict**: When creating project-scoped pools, you may encounter "Agent pool X already exists" if the pool exists at organization level. The deploy script now handles this automatically by catching the 409 error, querying to get the existing pool ID, and checking if a project queue needs to be created to link the pool to the project.
+- **KEDA ScaledObject failures**: If KEDA fails with "error parsing azure Pipelines metadata: no poolName or poolID given", ensure AZDO_PAT is set so the script can query Azure DevOps API to resolve pool IDs. The Helm chart templates now conditionally render KEDA ScaledObjects only when valid poolID values are present (not empty, not placeholder values like "x" or "y").
+- **PAT validation**: The deploy script performs fail-fast validation on AZDO_PAT, rejecting empty values or common placeholder strings like 'your-pat-token-here'. Check the masked PAT output in logs (shows first 4 + last 4 characters) to verify which token was resolved.
+- **Helm template type errors**: If you see "error calling ne: incompatible types for comparison", this has been fixed in the ScaledObject templates which now convert poolID values to strings before comparison.
 
 Notes
 

@@ -30,14 +30,14 @@ parameters:
     displayName: Instance number suffix (e.g. 003)
   - name: AZURE_SERVICE_CONNECTION
     type: string
-    default: "ADO_SvcConnRgScopedProd"
+    default: "DOS_DevOpsShield_Prod"
     values:
-      - "ADO_SvcConnRgScopedProd"
+      - "DOS_DevOpsShield_Prod"
   - name: ACR_NAME
     type: string
-    default: "cragents0036o3yuvhlr3ygc"
+    default: "devopsabcsrunners"
     values:
-      - "cragents0036o3yuvhlr3ygc"
+      - "devopsabcsrunners"
   - name: useAzureLocal
     type: boolean
     default: false
@@ -49,7 +49,7 @@ parameters:
     default: "aks-ado-agents-003"
   - name: azureDevOpsOrgUrl
     type: string
-    default: "https://dev.azure.com/devops-halo"
+    default: "https://dev.azure.com/cad4devops"
   - name: confirmDeletion
     type: string
     default: "YES"
@@ -73,7 +73,7 @@ parameters:
     default: true # Set to true to use on-premises agents, false to use cloud agents
 
 variables:
-  - group: "DevOpsAgentswithK8S-003" # to get AZDO_PAT
+  - group: "ADO_az-devops-agents-k8s-003" # to get AZDO_PAT
   - name: azureSubscription
     value: ${{ parameters.AZURE_SERVICE_CONNECTION }}
 
@@ -265,4 +265,3 @@ stages:
                 $lines | Out-File $path -Encoding utf8
                 Write-Host "##vso[task.addattachment type=Distributedtask.Core.Summary;name=Uninstall Summary]$path"
                 $lines | ForEach-Object { Write-Host $_ }
-

@@ -1,3 +1,5 @@
+{{- $poolIDStr := toString .Values.poolID.linux -}}
+{{- if and .Values.poolID.linux (ne $poolIDStr "") (ne $poolIDStr "x") }}
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
 metadata:
@@ -15,3 +17,4 @@ spec:
         organizationURLFromEnv: "AZP_URL"
       authenticationRef:
         name: pipeline-trigger-auth
+{{- end }}

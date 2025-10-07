@@ -27,6 +27,12 @@ Notes & recent updates
 - The repository includes `copilot-instructions.md` at the repo root with guidance for automated agents and contributors; follow its guidelines when editing scripts or pipelines.
 - The weekly images pipeline now runs per-version Windows jobs (2019/2022/2025) to enable parallel builds and determinism. Each job writes a per-job manifest under `manifests/windows-<version>-digest.txt`.
 - Temporary mock runners live in `.tmp/` to allow safe local dry-runs without network pushes. They are intended for developer convenience and should not be included in release PRs unless explicitly desired.
+- **Recent troubleshooting documentation updates (2025-10)**:
+  - Added guidance for agent pool 409 Conflict errors (pool exists at org level) - deploy script now handles automatically
+  - Added KEDA ScaledObject troubleshooting (invalid poolID, missing AZDO_PAT, type comparison errors)
+  - Added PAT validation documentation (placeholder detection, masked output, fail-fast behavior)
+  - Added Helm template type comparison error resolution
+  - See updated troubleshooting sections in `deploy-selfhosted-agents.md`, `bootstrap-and-build.md`, main `README.md`, and Helm chart `README.md`
 
 How to contribute updates to docs
 

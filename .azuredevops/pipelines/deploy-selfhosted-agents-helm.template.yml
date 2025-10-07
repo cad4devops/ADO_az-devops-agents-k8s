@@ -27,7 +27,7 @@ parameters:
       - "__ACR_NAME__"
   - name: attachAcr
     type: boolean
-    default: true
+    default: false
   - name: skipLinux
     type: boolean
     default: false

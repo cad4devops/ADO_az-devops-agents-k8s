@@ -170,6 +170,12 @@ Support & troubleshooting
 - If pipeline create/update fails due to az CLI extension differences, re-run with `AZDO_PAT` set and inspect the helper output. The helper prints `az` stdout/stderr when commands fail to aid diagnosis.
 - For secure-file upload failures, ensure the PAT has `Manage` permissions on secure files or use the helper's REST fallback which requires a PAT with secure-files write permissions.
 - If the orchestrator fails with "Variable group ... is missing required ACR variables" re-run the ACR credentials helper manually (`.azuredevops/scripts/add-acr-creds-to-variablegroup.ps1`) or verify PAT scopes include Variable Groups (Read, Manage). Secret values appear as null in CLI listing—presence, not value content, is what the verification checks.
+- **PAT validation failures**: The bootstrap script now performs fail-fast validation on AZDO_PAT, including:
+  - Rejects empty or whitespace-only values
+  - Detects and rejects common placeholder values ('your-pat-token-here', 'your-actual-pat-token', etc.)
+  - Shows masked PAT output (first 4 + last 4 characters) for debugging without exposing the full token
+  - Lists required PAT scopes when placeholder detected: Agent Pools (read, manage), Build (read, execute), Code (read), Variable Groups (read, create, manage), and Secure Files (read, create, manage)
+- **Function definition errors**: If you see "The term 'MaskPat' is not recognized", ensure all helper functions are defined before the code that calls them. This has been fixed in the current version.
 
 Related docs
 
