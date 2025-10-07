@@ -32,7 +32,13 @@ Example (export AZDO_PAT in pwsh)
 
 ```powershell
 $env:AZDO_PAT = 'ghp_xxx-your-pat-here'
-pwsh -NoProfile -File .\bootstrap-and-build.ps1 -InstanceNumber 003 -Location canadacentral -ContainerRegistryName cragents003c66i4n7btfksg
+pwsh -NoProfile -File .\bootstrap-and-build.ps1 `
+  -InstanceNumber 003 `
+  -Location canadacentral `
+  -ADOCollectionName <your-org-name> `
+  -AzureDevOpsProject <your-project-name> `
+  -AzureDevOpsRepo <your-repo-name> `
+  -ContainerRegistryName <your-acr-shortname>
 ```
 
 Security reminder

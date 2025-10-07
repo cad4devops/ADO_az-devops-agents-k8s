@@ -21,29 +21,112 @@ Prerequisites
 
 - PowerShell 7+ (pwsh) available on PATH.
 - Azure CLI (`az`) with `azure-devops` extension installed and configured (for AZ operations).
-- Docker (for building images) and appropriate host support (Windows Docker for Windows images).
+- **Azure DevOps Personal Access Token (PAT)** set as `AZDO_PAT` environment variable (required).
+- Docker (for building images) and appropriate host support (Windows Docker for Windows images) - optional if using `-BuildInPipeline`.
 - A container registry (ACR) or provide `-ContainerRegistryName` to the script.
-- An Azure DevOps PAT with scopes sufficient to manage variable groups, pipelines, and secure files if running the provisioning step (`AZDO_PAT` env var or provided interactively).
 - kubectl / helm not strictly required for the top-level script, but the deploy helper and Helm steps will need them when deploying into a cluster.
 
 Usage
 
-Run locally or in CI. Example:
+**IMPORTANT:** Set the `AZDO_PAT` environment variable before running.
+
+## Option 1: Using .env file (recommended for local development)
 
 ```powershell
-pwsh -NoProfile -File .\bootstrap-and-build.ps1 -InstanceNumber 003 -Location canadacentral -ContainerRegistryName cragents003c66i4n7btfksg
+# Copy the example file
+cp .env.example .env
+
+# Edit .env and set your PAT
+# AZDO_PAT=your-actual-pat-token-here
+
+# The script will automatically load .env when you run it
+pwsh -NoProfile -File .\bootstrap-and-build.ps1 `
+  -InstanceNumber 003 `
+  -Location canadacentral `
+  -ADOCollectionName <your-org-name> `
+  -AzureDevOpsProject <your-project-name> `
+  -AzureDevOpsRepo <your-repo-name> `
+  -BuildInPipeline
 ```
+
+## Option 2: Using environment variable (one-time or CI)
+
+```powershell
+# Set PAT first
+$env:AZDO_PAT = 'your-pat-token-here'
+
+# Then run the script
+pwsh -NoProfile -File .\bootstrap-and-build.ps1 `
+  -InstanceNumber 003 `
+  -Location canadacentral `
+  -ADOCollectionName <your-org-name> `
+  -AzureDevOpsProject <your-project-name> `
+  -AzureDevOpsRepo <your-repo-name> `
+  -BuildInPipeline
+```
+
+Run locally or in CI.
+
+**Example with local Docker builds:**
+
+```powershell
+# Set PAT first
+$env:AZDO_PAT = 'your-pat-token-here'
+
+# Run with local builds
+pwsh -NoProfile -File .\bootstrap-and-build.ps1 `
+  -InstanceNumber 003 `
+  -Location canadacentral `
+  -ADOCollectionName <your-org-name> `
+  -AzureDevOpsProject <your-project-name> `
+  -AzureDevOpsRepo <your-repo-name> `
+  -ContainerRegistryName <your-acr-shortname>
+```
+
+**Example deferring builds to pipeline (recommended for local setup):**
+
+```powershell
+# Set PAT first
+$env:AZDO_PAT = 'your-pat-token-here'
+
+# Run without local builds
+pwsh -NoProfile -File .\bootstrap-and-build.ps1 `
+  -InstanceNumber 003 `
+  -Location canadacentral `
+  -ADOCollectionName <your-org-name> `
+  -AzureDevOpsProject <your-project-name> `
+  -AzureDevOpsRepo <your-repo-name> `
+  -BuildInPipeline
+```
+
+> **Note:** When using `-BuildInPipeline`, the script sets up infrastructure and pipelines but skips local Docker builds. Run the weekly image refresh pipeline afterward to build and push images using CI agents with Docker.
 
 Key parameters
 
+**Required Parameters:**
+
 - `-InstanceNumber` (required): short identifier used to create resource names (RG, AKS, ACR defaults).
 - `-Location` (required): Azure location for infra deployment (when running deploy step).
+- `-ADOCollectionName` (required): Azure DevOps organization name.
+- `-AzureDevOpsProject` (required): Azure DevOps project name.
+- `-AzureDevOpsRepo` (required): Azure DevOps repository name.
+
+**Optional Parameters:**
+
 - `-ContainerRegistryName` (optional): when present, uses this ACR and skips discovery.
-- `-SkipContainerRegistry` (optional): explicit switch to skip creation when reusing an existing ACR. (Automatically implied if `-ContainerRegistryName` is provided.)
+- `-BuildInPipeline` (optional switch): skip local Docker image builds; infrastructure and pipelines will be set up, but image builds are deferred to the weekly refresh pipeline. Use this when running the bootstrap script locally without Docker Desktop or when you prefer to build images in CI rather than locally.
 - `-SkipContainerRegistry` (optional switch): explicitly signal to skip ACR creation. This is implied automatically whenever `-ContainerRegistryName` is supplied. The orchestrator renders `__SKIP_CONTAINER_REGISTRY__` token values in pipeline templates as `True` or `False` accordingly.
 - `-EnableWindows` (switch): enable Windows images and builds.
+- `-ResourceGroupName` (optional): custom resource group name (defaults to `rg-aks-ado-agents-<InstanceNumber>`).
+- `-WindowsNodeCount` (optional): number of Windows nodes (default: 1).
+- `-LinuxNodeCount` (optional): number of Linux nodes (default: 1).
+- `-AzureDevOpsOrgUrl` (optional): Azure DevOps organization URL (defaults to `https://dev.azure.com/<ADOCollectionName>`).
+- `-BootstrapPoolName` (optional): agent pool name for bootstrap (default: "KubernetesPoolWindows").
 - `-KubeconfigAzureLocalPath` / `-KubeContextAzureLocal`: used when uploading a kubeconfig as a secure file for local-mode pipelines.
-- `-AzureDevOpsOrgUrl`, `-AzureDevOpsProject`, `-AzureDevOpsRepo`: used by the provisioning helper when creating/updating pipelines.
+- `-AzureDevOpsServiceConnectionName` (optional): service connection name (default: "ADO_SvcConnRgScopedProd").
+- `-AzureDevOpsVariableGroup` (optional): variable group name (defaults to `<AzureDevOpsProject>-<InstanceNumber>`).
+- `-AzureDevOpsPatTokenEnvironmentVariableName` (optional): environment variable name for PAT (default: "AZDO_PAT").
+- Various pipeline name parameters for customizing created pipeline names.
 
 What it provisions
 
@@ -89,6 +172,7 @@ Support & troubleshooting
 - If the orchestrator fails with "Variable group ... is missing required ACR variables" re-run the ACR credentials helper manually (`.azuredevops/scripts/add-acr-creds-to-variablegroup.ps1`) or verify PAT scopes include Variable Groups (Read, Manage). Secret values appear as null in CLI listing—presence, not value content, is what the verification checks.
 
 Related docs
+
 ## Recent enhancements (2025-10)
 
 | Area | Change | Benefit |
