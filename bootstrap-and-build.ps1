@@ -26,7 +26,7 @@ param(
     [Parameter(Mandatory = $true)][string]$AzureDevOpsProject,
     [Parameter(Mandatory = $true)][string]$AzureDevOpsRepo,
     [Parameter(Mandatory = $false)][string]$ResourceGroupName,
-    [Parameter(Mandatory = $false)][string]$ContainerRegistryName = "devopsabcsrunners", # specify your container registry name or leave empty to create one
+    [Parameter(Mandatory = $false)][string]$ContainerRegistryName, # = "devopsabcsrunners", # specify your container registry name or leave empty to create one
     [Parameter(Mandatory = $false)][switch]$BuildInPipeline,
     [Parameter(Mandatory = $false)][switch]$EnableWindows,
     [Parameter(Mandatory = $false)][int]$WindowsNodeCount = 1,
