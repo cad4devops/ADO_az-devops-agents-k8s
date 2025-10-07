@@ -22,32 +22,80 @@ Notes:
 param(
     [Parameter(Mandatory = $true)][string]$InstanceNumber,
     [Parameter(Mandatory = $true)][string]$Location,
+    [Parameter(Mandatory = $true)][string]$ADOCollectionName,
+    [Parameter(Mandatory = $true)][string]$AzureDevOpsProject,
+    [Parameter(Mandatory = $true)][string]$AzureDevOpsRepo,
     [Parameter(Mandatory = $false)][string]$ResourceGroupName,
-    [Parameter(Mandatory = $false)][string]$ContainerRegistryName = "devopsabcsrunners", # specify this to override generated container registry and use an existing one
+    [Parameter(Mandatory = $false)][string]$ContainerRegistryName,
+    [Parameter(Mandatory = $false)][switch]$BuildInPipeline,
     [Parameter(Mandatory = $false)][switch]$EnableWindows,
     [Parameter(Mandatory = $false)][int]$WindowsNodeCount = 1,
     [Parameter(Mandatory = $false)][int]$LinuxNodeCount = 1,
-    [Parameter(Mandatory = $false)][string]$AzureDevOpsOrgUrl = 'https://dev.azure.com/cad4devops',
-    [Parameter(Mandatory = $false)][string]$AzureDevOpsProject = 'Cad4DevOps',
-    [Parameter(Mandatory = $false)][string]$AzureDevOpsRepo = 'ADO_az-devops-agents-k8s',
+    [Parameter(Mandatory = $false)][string]$AzureDevOpsOrgUrl = "https://dev.azure.com/$ADOCollectionName",
+
+
     [Parameter(Mandatory = $false)][string]$BootstrapPoolName = 'KubernetesPoolWindows',
     [Parameter(Mandatory = $false)][string]$KubeconfigAzureLocalPath = "workload-cluster-$InstanceNumber-kubeconfig.yaml",
     [Parameter(Mandatory = $false)][string]$KubeContextAzureLocal = "workload-cluster-$InstanceNumber-admin@workload-cluster-$InstanceNumber",
-    [Parameter(Mandatory = $false)][string]$KubeConfigFilePath = "C:\Users\emmanuel.DEVOPSABCS.000\.kube\workload-cluster-$InstanceNumber-kubeconfig.yaml",
-    [Parameter(Mandatory = $false)][string]$AzureDevOpsServiceConnectionName = 'DOS_DevOpsShield_Prod',
-    [Parameter(Mandatory = $false)][string]$AzureDevOpsVariableGroup = "ADO_az-devops-agents-k8s-$InstanceNumber",
+    [Parameter(Mandatory = $false)][string]$KubeConfigFilePath = "$HOME\.kube\workload-cluster-$InstanceNumber-kubeconfig.yaml",
+    [Parameter(Mandatory = $false)][string]$AzureDevOpsServiceConnectionName = 'ADO_SvcConnRgScopedProd',
+    [Parameter(Mandatory = $false)][string]$AzureDevOpsVariableGroup = "$AzureDevOpsProject-$InstanceNumber",
     [Parameter(Mandatory = $false)][string]$AzureDevOpsPatTokenEnvironmentVariableName = "AZDO_PAT",
-    [Parameter(Mandatory = $false)][string]$InstallPipelineName = "ADO_az-devops-agents-k8s-deploy-self-hosted-agents-helm",
-    [Parameter(Mandatory = $false)][string]$UninstallPipelineName = "ADO_az-devops-agents-k8s-uninstall-selfhosted-agents-helm",
-    [Parameter(Mandatory = $false)][string]$ValidatePipelineName = "ADO_az-devops-agents-k8s-validate-self-hosted-agents-helm",
-    [Parameter(Mandatory = $false)][string]$ImageRefreshPipelineName = "ADO_az-devops-agents-k8s-weekly-image-refresh",
-    [Parameter(Mandatory = $false)][string]$RunOnPoolSamplePipelineName = "ADO_az-devops-agents-k8s-run-on-selfhosted-pool-sample-helm",
-    [Parameter(Mandatory = $false)][string]$DeployAksInfraPipelineName = "ADO_az-devops-agents-k8s-deploy-aks-helm",
+    [Parameter(Mandatory = $false)][string]$InstallPipelineName = "$AzureDevOpsProject-deploy-self-hosted-agents-helm",
+    [Parameter(Mandatory = $false)][string]$UninstallPipelineName = "$AzureDevOpsProject-uninstall-selfhosted-agents-helm",
+    [Parameter(Mandatory = $false)][string]$ValidatePipelineName = "$AzureDevOpsProject-validate-self-hosted-agents-helm",
+    [Parameter(Mandatory = $false)][string]$ImageRefreshPipelineName = "$AzureDevOpsProject-weekly-image-refresh",
+    [Parameter(Mandatory = $false)][string]$RunOnPoolSamplePipelineName = "$AzureDevOpsProject-run-on-selfhosted-pool-sample-helm",
+    [Parameter(Mandatory = $false)][string]$DeployAksInfraPipelineName = "$AzureDevOpsProject-deploy-aks-helm",
     [Parameter(Mandatory = $false)][string]$KubeConfigSecretFile = "AKS_workload-cluster-$InstanceNumber-kubeconfig_file"
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+# Load .env file if it exists (before validation)
+$envFile = Join-Path $PSScriptRoot '.env'
+if (Test-Path $envFile) {
+    Write-Host "Loading environment variables from .env file..."
+    Get-Content $envFile | ForEach-Object {
+        $line = $_.Trim()
+        # Skip empty lines and comments
+        if ($line -and -not $line.StartsWith('#')) {
+            if ($line -match '^([^=]+)=(.*)$') {
+                $name = $matches[1].Trim()
+                $value = $matches[2].Trim()
+                # Remove surrounding quotes if present
+                if ($value -match '^["''](.*)["'']$') {
+                    $value = $matches[1]
+                }
+                Set-Item -Path "env:$name" -Value $value
+                Write-Host "  Loaded: $name"
+            }
+        }
+    }
+}
+
+# Validate required environment variable
+if ([string]::IsNullOrWhiteSpace($env:AZDO_PAT)) {
+    Write-Error @"
+ERROR: Required environment variable 'AZDO_PAT' is not set.
+
+The Azure DevOps Personal Access Token (PAT) is required to create/update:
+  - Variable groups
+  - Pipelines
+  - Secure files
+
+Please set the AZDO_PAT environment variable before running this script:
+
+  `$env:AZDO_PAT = 'your-pat-token-here'
+
+Or create a .env file in the repository root with:
+  AZDO_PAT=your-pat-token-here
+
+See docs/bootstrap-env.md for PAT scope requirements.
+"@
+    exit 1
+}
 
 function Fail([string]$msg) { Write-Error $msg; exit 1 }
 
@@ -182,37 +230,42 @@ Write-Host "##vso[task.setvariable variable=AKS_NAME]$aksName"
 Write-Host "##vso[task.setvariable variable=AKS_RESOURCE_GROUP]$ResourceGroupName"
 
 # Build & push images: Linux
-Write-Host "Starting Linux image build/push using azsh-linux-agent/01-build-and-push.ps1"
-$linuxDir = Join-Path $repoRoot 'azsh-linux-agent'
-$linuxScriptName = '01-build-and-push.ps1'
-$linuxScriptPath = Join-Path $linuxDir $linuxScriptName
-if (-not (Test-Path $linuxScriptPath)) {
-    Write-Warning "Linux build script not found at $linuxScriptPath; skipping Linux build."
+if ($BuildInPipeline) {
+    Write-Host "BuildInPipeline is set; skipping local image builds. Images will be built via the weekly image refresh pipeline."
 }
 else {
-    # Attempt to ensure Docker is using Linux containers on Windows hosts
-    Switch-DockerEngine -target 'linux' -timeoutSeconds 90
-    # Run the linux build script from its directory so relative Dockerfile paths resolve correctly
-    $cmd = "Set-StrictMode -Version Latest; Set-Location -LiteralPath '$linuxDir'; `$env:DEFAULT_ACR='$acrShort'; `$env:ACR_NAME='$acrShort'; `$env:DOCKER_DEFAULT_PLATFORM='linux'; & .\\$linuxScriptName -ContainerRegistryName '$acrFqdn' -DefaultAcr '$acrShort'"
-    Write-Host "Invoking linux build: pwsh -NoProfile -NonInteractive -Command <script in $linuxDir>"
-    pwsh -NoProfile -NonInteractive -Command $cmd
-    if ($LASTEXITCODE -ne 0) { Write-Warning "Linux build script exited with code $LASTEXITCODE" }
-}
-Write-Host "Starting Windows image builds using azsh-windows-agent/01-build-and-push.ps1"
-$winDir = Join-Path $repoRoot 'azsh-windows-agent'
-$winScriptName = '01-build-and-push.ps1'
-$winScriptPath = Join-Path $winDir $winScriptName
-if (-not (Test-Path $winScriptPath)) {
-    Write-Warning "Windows build script not found at $winScriptPath; skipping Windows builds."
-}
-else {
-    # Switch Docker to Windows containers when building Windows images
-    Switch-DockerEngine -target 'windows' -timeoutSeconds 90
-    # Run the Windows build script in a separate pwsh process and pass parameters explicitly so PSBoundParameters in that script is populated correctly
-    $cmd = "Set-StrictMode -Version Latest; Set-Location -LiteralPath '$winDir'; `$env:DEFAULT_ACR='$acrShort'; `$env:ACR_NAME='$acrShort'; & .\$winScriptName -ContainerRegistryName '$acrFqdn' -DefaultAcr '$acrShort'"
-    Write-Host "Invoking windows build script in $winDir with explicit parameters"
-    pwsh -NoProfile -NonInteractive -Command $cmd
-    if ($LASTEXITCODE -ne 0) { Write-Warning "Windows build invocation exited with code $LASTEXITCODE" }
+    Write-Host "Starting Linux image build/push using azsh-linux-agent/01-build-and-push.ps1"
+    $linuxDir = Join-Path $repoRoot 'azsh-linux-agent'
+    $linuxScriptName = '01-build-and-push.ps1'
+    $linuxScriptPath = Join-Path $linuxDir $linuxScriptName
+    if (-not (Test-Path $linuxScriptPath)) {
+        Write-Warning "Linux build script not found at $linuxScriptPath; skipping Linux build."
+    }
+    else {
+        # Attempt to ensure Docker is using Linux containers on Windows hosts
+        Switch-DockerEngine -target 'linux' -timeoutSeconds 90
+        # Run the linux build script from its directory so relative Dockerfile paths resolve correctly
+        $cmd = "Set-StrictMode -Version Latest; Set-Location -LiteralPath '$linuxDir'; `$env:DEFAULT_ACR='$acrShort'; `$env:ACR_NAME='$acrShort'; `$env:DOCKER_DEFAULT_PLATFORM='linux'; & .\\$linuxScriptName -ContainerRegistryName '$acrFqdn' -DefaultAcr '$acrShort'"
+        Write-Host "Invoking linux build: pwsh -NoProfile -NonInteractive -Command <script in $linuxDir>"
+        pwsh -NoProfile -NonInteractive -Command $cmd
+        if ($LASTEXITCODE -ne 0) { Write-Warning "Linux build script exited with code $LASTEXITCODE" }
+    }
+    Write-Host "Starting Windows image builds using azsh-windows-agent/01-build-and-push.ps1"
+    $winDir = Join-Path $repoRoot 'azsh-windows-agent'
+    $winScriptName = '01-build-and-push.ps1'
+    $winScriptPath = Join-Path $winDir $winScriptName
+    if (-not (Test-Path $winScriptPath)) {
+        Write-Warning "Windows build script not found at $winScriptPath; skipping Windows builds."
+    }
+    else {
+        # Switch Docker to Windows containers when building Windows images
+        Switch-DockerEngine -target 'windows' -timeoutSeconds 90
+        # Run the Windows build script in a separate pwsh process and pass parameters explicitly so PSBoundParameters in that script is populated correctly
+        $cmd = "Set-StrictMode -Version Latest; Set-Location -LiteralPath '$winDir'; `$env:DEFAULT_ACR='$acrShort'; `$env:ACR_NAME='$acrShort'; & .\$winScriptName -ContainerRegistryName '$acrFqdn' -DefaultAcr '$acrShort'"
+        Write-Host "Invoking windows build script in $winDir with explicit parameters"
+        pwsh -NoProfile -NonInteractive -Command $cmd
+        if ($LASTEXITCODE -ne 0) { Write-Warning "Windows build invocation exited with code $LASTEXITCODE" }
+    }
 }
 
 # Render pipeline templates by replacing tokens
@@ -288,52 +341,40 @@ else {
 }
 
 # Attempt to invoke helper that will add ACR credentials into the Azure DevOps variable group.
-# This is safe to skip when a PAT is not available in the environment; the helper requires a PAT
-# with variable-group write scope. The name of the env var holding the PAT is provided by
-# $AzureDevOpsPatTokenEnvironmentVariableName (default: AZDO_PAT).
-$addAcrScript = Join-Path $repoRoot '.azuredevops\scripts\add-acr-creds-to-variablegroup.ps1'
+# The CLI-based helper uses Azure CLI commands and AZDO_PAT from environment automatically.
+$addAcrScript = Join-Path $repoRoot '.azuredevops\scripts\add-acr-creds-to-variablegroup-cli.ps1'
 if (Test-Path $addAcrScript) {
-    Write-Host "Invoking add-acr-creds-to-variablegroup helper: $addAcrScript"
-    # Read the PAT value from the named environment variable (the param contains the env var name)
-    $pat = $null
-    try { $pat = (Get-Item -Path ("Env:" + $AzureDevOpsPatTokenEnvironmentVariableName) -ErrorAction SilentlyContinue).Value } catch {}
-    if (-not $pat) {
-        Write-Warning "Environment variable '$AzureDevOpsPatTokenEnvironmentVariableName' is not set; skipping add-acr-creds-to-variablegroup. To run this step, set that env var to a PAT with Variable Group write scope."
+    Write-Host "Invoking add-acr-creds-to-variablegroup-cli helper: $addAcrScript"
+    $addArgs = @(
+        '-AcrName', $acrShort,
+        '-OrgUrl', $AzureDevOpsOrgUrl,
+        '-Project', $AzureDevOpsProject,
+        '-VariableGroupName', $AzureDevOpsVariableGroup
+    )
+    $addOutput = @()
+    & pwsh -NoProfile -NonInteractive -File $addAcrScript @addArgs 2>&1 | Tee-Object -Variable addOutput | ForEach-Object { Write-Host $_ }
+    $rc = $LASTEXITCODE
+    if ($rc -ne 0) {
+        $joined = $addOutput -join "`n"
+        Write-Warning "add-acr-creds-to-variablegroup-cli helper exited with code $rc. Output:`n$joined"
     }
     else {
-        $addArgs = @(
-            '-AcrName', $acrShort,
-            '-OrgUrl', $AzureDevOpsOrgUrl,
-            '-Project', $AzureDevOpsProject,
-            '-VariableGroupName', $AzureDevOpsVariableGroup,
-            '-AzDoPat', $pat
-        )
-        $addOutput = @()
-        & pwsh -NoProfile -NonInteractive -File $addAcrScript @addArgs 2>&1 | Tee-Object -Variable addOutput | ForEach-Object { Write-Host $_ }
-        $rc = $LASTEXITCODE
-        if ($rc -ne 0) {
-            $joined = $addOutput -join "`n"
-            Write-Warning "add-acr-creds-to-variablegroup helper exited with code $rc. Output:`n$joined"
-        }
-        else {
-            Write-Host "add-acr-creds-to-variablegroup helper completed successfully."
-        }
+        Write-Host "add-acr-creds-to-variablegroup-cli helper completed successfully."
     }
 }
 else {
-    Write-Host "add-acr-creds-to-variablegroup helper not found at $addAcrScript; skipping."
+    Write-Host "add-acr-creds-to-variablegroup-cli helper not found at $addAcrScript; skipping."
 }
 
-# Post-check: if a PAT was provided and we attempted to run add-acr, verify the variable group
-# contains ACR_USERNAME and ACR_PASSWORD so pipelines fail fast if secrets weren't created.
+# Post-check: verify the variable group contains ACR_USERNAME and ACR_PASSWORD 
+# so pipelines fail fast if secrets weren't created.
 try {
-    if ($pat) {
-        Write-Host "Verifying variable group '$AzureDevOpsVariableGroup' contains ACR_USERNAME and ACR_PASSWORD..."
-        $vgListJson = az pipelines variable-group list --org $AzureDevOpsOrgUrl --project $AzureDevOpsProject -o json 2>$null
-        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($vgListJson)) {
-            Write-Warning "Unable to list variable groups using az CLI; skipping ACR variable verification."
-        }
-        else {
+    Write-Host "Verifying variable group '$AzureDevOpsVariableGroup' contains ACR_USERNAME and ACR_PASSWORD..."
+    $vgListJson = az pipelines variable-group list --org $AzureDevOpsOrgUrl --project $AzureDevOpsProject -o json 2>$null
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($vgListJson)) {
+        Write-Warning "Unable to list variable groups using az CLI; skipping ACR variable verification."
+    }
+    else {
             $vgList = $null
             try { $vgList = $vgListJson | ConvertFrom-Json -ErrorAction Stop } catch { $vgList = $null }
             if (-not $vgList) { Write-Warning "Failed to parse variable groups list JSON; skipping verification." }
@@ -384,10 +425,6 @@ try {
                 }
             }
         }
-    }
-    else {
-        Write-Host "AZDO PAT not set; skipping verification of ACR variables in variable group."
-    }
 }
 catch {
     Fail ("ACR variable verification failed: {0}" -f $_.Exception.Message)

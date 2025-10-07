@@ -489,3 +489,5 @@ $RECYCLE.BIN/
 # Vim temporary swap files
 *.swp
 
+
+kubernetes/linux-agent/secret.yaml

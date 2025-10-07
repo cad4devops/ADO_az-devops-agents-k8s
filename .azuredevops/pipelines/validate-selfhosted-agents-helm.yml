@@ -26,13 +26,13 @@ parameters:
 resources:
   pipelines:
     - pipeline: deployAgentsHelm
-      source: ADO_az-devops-agents-k8s-deploy-self-hosted-agents-helm
+      source: DevOpsAgentswithK8S-deploy-self-hosted-agents-helm
       trigger: true # automatic trigger on successful run of source pipeline
 
 variables:
-  - group: "ADO_az-devops-agents-k8s-003" # to get AZDO_PAT
+  - group: "DevOpsAgentswithK8S-003" # to get AZDO_PAT
   - name: samplePipelineNameHelm
-    value: ADO_az-devops-agents-k8s-run-on-selfhosted-pool-sample-helm # changed to helm pipeline name
+    value: DevOpsAgentswithK8S-run-on-selfhosted-pool-sample-helm # changed to helm pipeline name
 
 stages:
   - stage: LoadConfig
@@ -200,6 +200,7 @@ stages:
                 $ext = (& az extension list --query "[?name=='azure-devops']" -o json) | ConvertFrom-Json
                 if(-not $ext){ Write-Host 'Installing azure-devops extension'; az extension add --name azure-devops --yes | Out-Null }
 
+                Write-Host "Configuring az devops defaults: org=$orgUrl project=$project"
                 $env:AZURE_DEVOPS_EXT_PAT = $pat
                 & az devops configure --defaults organization=$orgUrl project=$project | Out-Null
 
@@ -207,7 +208,24 @@ stages:
                 $useLocal = $false
                 if ('$(useAzureLocal)' -ne '') { $useLocal = '$(useAzureLocal)' -in @('True','true','1') }
                 $useLocalParam = if($useLocal) { 'true' } else { 'false' }
-                $runJson = & az pipelines run --name $pipelineName --parameters instanceNumber=$instance os=linux helloWaitSeconds=$(linuxHelloWaitSeconds) useAzureLocal=$useLocalParam --output json 2>&1
+                      
+                # Determine branch to use for queuing the sample pipeline (defensive)
+                $branch = '$(resources.pipeline.deployAgentsHelm.sourceBranch)'
+                
+                # If the resource token was not expanded (literal $[...] or empty), fall back to Build.SourceBranch
+                if ($branch -like '$*' -or [string]::IsNullOrWhiteSpace($branch)) {
+                  $branch = '$(Build.SourceBranch)'
+                }
+                
+                # Final fallback to a safe default if still empty
+                if ([string]::IsNullOrWhiteSpace($branch)) {
+                  $branch = 'refs/heads/main'
+                }
+                
+                # Convert to short branch name (strip refs/heads/)
+                $branch = $branch -replace '^refs/heads/',''
+                # ...continue existing code that calls `az pipelines run --branch $branch`...
+                $runJson = & az pipelines run --name $pipelineName --branch $branch --parameters instanceNumber=$instance os=linux helloWaitSeconds=$(linuxHelloWaitSeconds) useAzureLocal=$useLocalParam --output json 2>&1
                 if($LASTEXITCODE -ne 0){ Write-Error $runJson; throw 'Failed to queue sample pipeline run via az pipelines run' }
                 $runObj = $runJson | Out-String | ConvertFrom-Json
                 $runId = $runObj.id
@@ -410,7 +428,24 @@ stages:
                 $useLocal = $false
                 if ('$(useAzureLocal)' -ne '') { $useLocal = '$(useAzureLocal)' -in @('True','true','1') }
                 $useLocalParam = if($useLocal) { 'true' } else { 'false' }
-                $runJson = & az pipelines run --name $pipelineName --parameters instanceNumber=$instance os=windows helloWaitSeconds=$(windowsHelloWaitSeconds) useAzureLocal=$useLocalParam --output json 2>&1
+                
+                # Determine branch to use for queuing the sample pipeline (defensive)
+                $branch = '$(resources.pipeline.deployAgentsHelm.sourceBranch)'
+                
+                # If the resource token was not expanded (literal $[...] or empty), fall back to Build.SourceBranch
+                if ($branch -like '$*' -or [string]::IsNullOrWhiteSpace($branch)) {
+                  $branch = '$(Build.SourceBranch)'
+                }
+                
+                # Final fallback to a safe default if still empty
+                if ([string]::IsNullOrWhiteSpace($branch)) {
+                  $branch = 'refs/heads/main'
+                }
+                
+                # Convert to short branch name (strip refs/heads/)
+                $branch = $branch -replace '^refs/heads/',''
+                
+                $runJson = & az pipelines run --name $pipelineName --branch $branch --parameters instanceNumber=$instance os=windows helloWaitSeconds=$(windowsHelloWaitSeconds) useAzureLocal=$useLocalParam --output json 2>&1
                 if($LASTEXITCODE -ne 0){ Write-Error $runJson; throw 'Failed to queue sample pipeline run via az pipelines run' }
                 $runObj = $runJson | Out-String | ConvertFrom-Json
                 $runId = $runObj.id

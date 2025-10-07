@@ -196,7 +196,8 @@ foreach ($relPath in $pipelineFiles) {
         Write-Host "Creating new pipeline $pipelineName"
         # Create pipeline referencing the YAML in the repository. Passing repository name is supported in many
         # az versions; if it fails in your environment, create the pipeline manually in the project or adjust.
-        az pipelines create --name $pipelineName --org $OrganizationUrl --project $ProjectName --repository $RepositoryName --branch main --yml-path $relPath --skip-first-run true 1>$null
+        # --repository-type tfsgit indicates Azure Repos (not GitHub or other external repo)
+        az pipelines create --name $pipelineName --org $OrganizationUrl --project $ProjectName --repository $RepositoryName --repository-type tfsgit --branch main --yml-path $relPath --skip-first-run true 1>$null
         if ($LASTEXITCODE -ne 0) { Write-Warning "Failed to create pipeline $pipelineName" }
     }
 }

@@ -26,14 +26,14 @@ schedules:
 parameters:
   - name: AZURE_SERVICE_CONNECTION
     type: string
-    default: "DOS_DevOpsShield_Prod"
+    default: "ADO_SvcConnRgScopedProd"
     values:
-      - "DOS_DevOpsShield_Prod"
+      - "ADO_SvcConnRgScopedProd"
   - name: ACR_NAME
     type: string
-    default: "devopsabcsrunners"
+    default: "cragents0036o3yuvhlr3ygc"
     values:
-      - "devopsabcsrunners"
+      - "cragents0036o3yuvhlr3ygc"
   - name: skipLinux
     type: boolean
     default: false

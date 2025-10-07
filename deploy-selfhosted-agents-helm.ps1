@@ -288,24 +288,111 @@ function QuoteYaml([string]$s) {
 }
 
 # ensure Azure DevOps agent pools (optional)
-function Ensure-Pool([string]$orgUrl, [string]$pat, [string]$poolName) {
+# Helper function to ensure Azure DevOps agent pools exist at project level
+function Ensure-Pool([string]$orgUrl, [string]$pat, [string]$poolName, [string]$projectName = $null) {
     $authHeader = 'Basic ' + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(':' + $pat))
     $headers = @{ Authorization = $authHeader }
     $apiVersion = '7.1-preview.1'
-    $getUri = "$orgUrl/_apis/distributedtask/pools?poolName=$([Uri]::EscapeDataString($poolName))&api-version=$apiVersion"
-    try {
-        $resp = Invoke-RestMethod -Method Get -Uri $getUri -Headers $headers -ErrorAction Stop
-        if ($resp.count -gt 0) { Write-Host "Pool $poolName exists (id=$($resp.value[0].id))"; return $resp.value[0].id }
+    
+    if (-not $projectName) {
+        Write-Warning "No project name provided; creating organization-level pool (legacy behavior)"
+        # Original organization-level pool creation
+        $getUri = "$orgUrl/_apis/distributedtask/pools?poolName=$([Uri]::EscapeDataString($poolName))&api-version=$apiVersion"
+        try {
+            $resp = Invoke-RestMethod -Method Get -Uri $getUri -Headers $headers -ErrorAction Stop
+            if ($resp.count -gt 0) { 
+                Write-Host "Pool $poolName exists (id=$($resp.value[0].id))"
+                return $resp.value[0].id 
+            }
+        }
+        catch {
+            # Pool doesn't exist, will create
+        }
+        Write-Host "Creating organization-level pool $poolName"
+        $createUri = "$orgUrl/_apis/distributedtask/pools?api-version=$apiVersion"
+        $body = @{ name = $poolName } | ConvertTo-Json -Compress
+        $created = Invoke-RestMethod -Method Post -Uri $createUri -Headers ($headers + @{ 'Content-Type' = 'application/json' }) -Body $body -ErrorAction Stop
+        Write-Host "Created pool id=$($created.id)"
+        return $created.id
     }
-    catch {
-        # continue to try create
+    else {
+        # Project-scoped pool creation
+        Write-Host "Creating project-scoped pool '$poolName' in project '$projectName'"
+        
+        # Get project ID first
+        try {
+            $projectUri = "$orgUrl/_apis/projects/$([Uri]::EscapeDataString($projectName))?api-version=7.1-preview.1"
+            $project = Invoke-RestMethod -Method Get -Uri $projectUri -Headers $headers -ErrorAction Stop
+            $projectId = $project.id
+            Write-Host "Resolved project '$projectName' to ID: $projectId"
+        }
+        catch {
+            Write-Warning "Failed to resolve project '$projectName': $($_.Exception.Message)"
+            throw
+        }
+        
+        # Check if project-scoped pool already exists by querying agent queues in the project
+        $queueUri = "$orgUrl/$projectId/_apis/distributedtask/queues?api-version=$apiVersion"
+        $poolId = $null
+        try {
+            $queues = Invoke-RestMethod -Method Get -Uri $queueUri -Headers $headers -ErrorAction Stop
+            $existingQueue = $queues.value | Where-Object { $_.name -eq $poolName }
+            if ($existingQueue) {
+                $poolId = $existingQueue.pool.id
+                Write-Host "Project-scoped pool '$poolName' already exists (pool id=$poolId, queue id=$($existingQueue.id))"
+                return $poolId
+            }
+        }
+        catch {
+            Write-Warning "Failed to query existing queues: $($_.Exception.Message)"
+        }
+        
+        # Create new project-scoped pool
+        # First create the pool at organization level with autoProvision=false (project-scoped)
+        try {
+            $createPoolUri = "$orgUrl/_apis/distributedtask/pools?api-version=$apiVersion"
+            $poolBody = @{
+                name = $poolName
+                autoProvision = $false  # This makes it project-scoped
+                autoSize = $false
+                isHosted = $false
+            } | ConvertTo-Json -Compress
+            
+            $createdPool = Invoke-RestMethod -Method Post -Uri $createPoolUri `
+                -Headers ($headers + @{ 'Content-Type' = 'application/json' }) `
+                -Body $poolBody `
+                -ErrorAction Stop
+            
+            $poolId = $createdPool.id
+            Write-Host "Created pool '$poolName' with id=$poolId (autoProvision=false)"
+        }
+        catch {
+            Write-Warning "Failed to create pool: $($_.Exception.Message)"
+            throw
+        }
+        
+        # Now create the queue in the project to link it
+        try {
+            $queueBody = @{
+                name = $poolName
+                pool = @{ id = $poolId }
+            } | ConvertTo-Json -Compress
+            
+            $createQueueUri = "$orgUrl/$projectId/_apis/distributedtask/queues?api-version=$apiVersion"
+            $queue = Invoke-RestMethod -Method Post -Uri $createQueueUri `
+                -Headers ($headers + @{ 'Content-Type' = 'application/json' }) `
+                -Body $queueBody `
+                -ErrorAction Stop
+            
+            Write-Host "Created project-scoped queue for pool '$poolName' (queue id=$($queue.id))"
+        }
+        catch {
+            Write-Warning "Created pool but failed to create queue in project: $($_.Exception.Message)"
+            # Pool exists but not linked - caller may need to manually link
+        }
+        
+        return $poolId
     }
-    Write-Host "Creating pool $poolName"
-    $createUri = "$orgUrl/_apis/distributedtask/pools?api-version=$apiVersion"
-    $body = @{ name = $poolName } | ConvertTo-Json -Compress
-    $created = Invoke-RestMethod -Method Post -Uri $createUri -Headers ($headers + @{ 'Content-Type' = 'application/json' }) -Body $body -ErrorAction Stop
-    Write-Host "Created pool id=$($created.id)"
-    return $created.id
 }
 
 <#
@@ -321,15 +408,24 @@ $shouldEnsurePools = $false
 # pools are created automatically prior to Helm deployment to avoid agent registration errors.
 if ($EnsureAzDoPools.IsPresent) { $shouldEnsurePools = $true }
 if (-not $shouldEnsurePools -and $effectiveAzDoToken -and $AzureDevOpsOrgUrl) { $shouldEnsurePools = $true }
+# Call Ensure-Pool with project name (around line 324-333)
 if ($shouldEnsurePools) {
-    # Choose PAT: prefer the already-computed effective token which may come from param or env
     $pat = $effectiveAzDoToken
     if (-not $pat) { Write-Warning 'No AzDo PAT supplied (AzDevOpsToken param or AZDO_PAT env); skipping pool creation' } else {
-        # Use the canonical Azure DevOps org URL parameter
         $org = $AzureDevOpsOrgUrl
         if (-not $org) { Write-Warning 'No Azure DevOps org URL available; skipping pool creation' } else {
-            if ($DeployLinux) { Ensure-Pool $org $pat $poolLinux | Out-Null }
-            if ($DeployWindows) { Ensure-Pool $org $pat $poolWindows | Out-Null }
+            # Get project name from environment (pipeline provides this) or use a default
+            $projectName = $env:SYSTEM_TEAMPROJECT
+            
+            if (-not $projectName) {
+                Write-Warning "SYSTEM_TEAMPROJECT not set; pools will be created at organization level. Set env:SYSTEM_TEAMPROJECT or pass project name to create project-scoped pools."
+            }
+            else {
+                Write-Host "Creating project-scoped pools in project: $projectName"
+            }
+            
+            if ($DeployLinux) { Ensure-Pool $org $pat $poolLinux $projectName | Out-Null }
+            if ($DeployWindows) { Ensure-Pool $org $pat $poolWindows $projectName | Out-Null }
         }
     }
 }
