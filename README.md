@@ -126,11 +126,21 @@ self-hosted-agents/      # Docs for OS specific setup
 
 | Variant | Use Case | Notes |
 | ------- | -------- | ----- |
-| Linux Standard | General builds (.NET, Node, Java, etc.) | Mounts host Docker socket by default. |
-| Windows | MSBuild/Windows-based workloads | Requires Windows nodes in cluster. |
+| Linux (prebaked default) | General builds (.NET, Node, Java, etc.) | Azure Pipelines agent pre-downloaded at image build; fast cold start. |
+| Windows 2019 / 2022 / 2025 (prebaked) | MSBuild / Windows workloads | Each tag contains pre-extracted agent bits. |
 | DinD (Sysbox) | Container builds w/ isolation | Uses `sysbox-runc` runtime class, avoids privileged docker socket mount. |
 
-All images start a standard Azure DevOps agent via startup script (`start.sh` / `start.ps1`). Customize Dockerfiles to add tools (e.g., `RUN apt-get install ...`).
+All images launch via startup scripts (`start.sh` / `start.ps1`). Prebaked images contain the Azure Pipelines agent under `/azp/agent` (Linux) or `C:\azp\agent` (Windows), eliminating runtime download delays (formerly 5–10+ min for parallel Windows pods).
+
+**Prebaked Performance (2025-10):**
+
+| Scenario | Before (standard) | After (prebaked) |
+|----------|-------------------|------------------|
+| 5 Windows pods scale-out | 5–10+ min | < 1 min |
+| 5 Linux pods scale-out | 1–2 min | < 30 s |
+| Network at scale-up | N × ~150MB | Single build-time fetch |
+
+Build scripts auto-detect the latest agent version via GitHub releases. Override with `-AgentVersion <ver>` or disable prebake with `-UseStandard` if you need legacy runtime download behavior.
 
 - - -
 

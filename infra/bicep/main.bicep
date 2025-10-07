@@ -5,10 +5,10 @@ param instanceNumber string
 @minLength(5)
 param containerRegistryName string = toLower('cragents${instanceNumber}${uniqueString(resourceGroup().id)}')
 
-@allowed(['Standard_D2s_v3', 'Standard_D4s_v3', 'Standard_DS2_v2'])
-param linuxVmSize string = 'Standard_D2s_v3'
+@allowed(['Standard_D2s_v3', 'Standard_D4s_v3', 'Standard_D8s_v3', 'Standard_DS2_v2', 'Standard_DS3_v2', 'Standard_DS4_v2'])
+param linuxVmSize string = 'Standard_D4s_v3'
 
-@allowed(['Standard_D2s_v3', 'Standard_D4s_v3', 'Standard_DS2_v2'])
+@allowed(['Standard_D2s_v3', 'Standard_D4s_v3', 'Standard_D8s_v3', 'Standard_DS2_v2', 'Standard_DS3_v2', 'Standard_DS4_v2'])
 param windowsVmSize string = 'Standard_D2s_v3'
 
 param linuxNodeCount int = 1

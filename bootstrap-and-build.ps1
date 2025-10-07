@@ -31,6 +31,8 @@ param(
     [Parameter(Mandatory = $false)][switch]$EnableWindows,
     [Parameter(Mandatory = $false)][int]$WindowsNodeCount = 1,
     [Parameter(Mandatory = $false)][int]$LinuxNodeCount = 1,
+    [Parameter(Mandatory = $false)][string]$LinuxVmSize = 'Standard_D4s_v3',
+    [Parameter(Mandatory = $false)][string]$WindowsVmSize = 'Standard_D2s_v3',
     [Parameter(Mandatory = $false)][string]$AzureDevOpsOrgUrl = "https://dev.azure.com/$ADOCollectionName",
 
 
@@ -194,7 +196,9 @@ $deployArgs = @(
     '-Location', $Location,
     '-ResourceGroupName', $ResourceGroupName,
     '-WindowsNodeCount', [string]$WindowsNodeCount,
-    '-LinuxNodeCount', [string]$LinuxNodeCount
+    '-LinuxNodeCount', [string]$LinuxNodeCount,
+    '-LinuxVmSize', $LinuxVmSize,
+    '-WindowsVmSize', $WindowsVmSize
 )
 if ($EnableWindows.IsPresent) { $deployArgs += '-EnableWindows'; $deployArgs += $true }
 if ($ContainerRegistryName) { $deployArgs += '-ContainerRegistryName'; $deployArgs += $ContainerRegistryName }

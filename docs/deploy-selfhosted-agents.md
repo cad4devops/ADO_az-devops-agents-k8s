@@ -7,7 +7,7 @@ Purpose
 - Deploys the Helm chart (or other infra) that provisions self‑hosted Azure DevOps agent pools on Kubernetes.
 - Sets up the Kubernetes Deployment(s), Secrets, and (optionally) KEDA objects required to run Linux and Windows agent pools.
 
-Note: For a single-command end-to-end onboarding (deploy infra, build images, and provision Azure DevOps resources) see `bootstrap-and-build.ps1` and `docs/bootstrap-and-build.md`.
+Note: For a single-command end-to-end onboarding (deploy infra, build **prebaked** images, and provision Azure DevOps resources) see `bootstrap-and-build.ps1`.
 
 When to run
 
@@ -27,6 +27,7 @@ Inputs / Parameters (notable changes)
 - `useOnPremAgents` (boolean, pipeline parameter): controls which CI agent pool the pipeline's summary/validation tasks run on. When true the pipeline will prefer the repository's on‑prem pool name (for example `UbuntuLatestPoolOnPrem`) for jobs that must run inside your private CI environment; when false it will use the hosted `ubuntu-latest` image. This parameter is separate from `useAzureLocal` (which only controls where kubeconfig is sourced from).
 - `azDoToken` / AZDO_PAT fallback: If the pipeline parameter for an Azure DevOps token is not explicitly provided the helper accepts the environment variable `AZDO_PAT` as a fallback.
 - ACR credentials: the helper accepts `ACR_ADO_USERNAME` and `ACR_ADO_PASSWORD` from the environment. If one is supplied the other is required — the helper will fail fast on partial credential input to avoid ambiguous failures during image push/pull.
+- Prebaked images: expect **no** runtime agent download; startup logs should contain `Using pre-baked Azure Pipelines agent`.
 
 Outputs
 
@@ -37,7 +38,7 @@ How it works (high level)
 
 1. Validate environment (kubectl / helm availability and credentials). The helper performs early validation of the Azure DevOps organization URL and will attempt to pre-create required agent pools via the REST API (Ensure-Pool) when requested.
 2. Render Helm chart values and inject secrets (or use existing secret store).
-3. Install/upgrade Helm chart `az-selfhosted-agents` with provided values.
+3. Install/upgrade Helm chart `az-selfhosted-agents` with values pointing to prebaked image tags (already containing agent bits).
 4. Optional steps to create agent pools in Azure DevOps via the REST API if desired.
 
 Wrapper script and execution model
@@ -59,6 +60,7 @@ Troubleshooting
 
 - If pods crash on startup, check `kubectl logs` for missing AZP_TOKEN or invalid AZP_URL.
 - If Helm fails, validate chart values and permissions in the target namespace.
+- If startup seems slow, verify the image tag corresponds to a prebaked build and look for the log line above.
 - **Agent pool creation 409 Conflict**: When creating project-scoped pools, you may encounter "Agent pool X already exists" if the pool exists at organization level. The deploy script now handles this automatically by catching the 409 error, querying to get the existing pool ID, and checking if a project queue needs to be created to link the pool to the project.
 - **KEDA ScaledObject failures**: If KEDA fails with "error parsing azure Pipelines metadata: no poolName or poolID given", ensure AZDO_PAT is set so the script can query Azure DevOps API to resolve pool IDs. The Helm chart templates now conditionally render KEDA ScaledObjects only when valid poolID values are present (not empty, not placeholder values like "x" or "y").
 - **PAT validation**: The deploy script performs fail-fast validation on AZDO_PAT, rejecting empty values or common placeholder strings like 'your-pat-token-here'. Check the masked PAT output in logs (shows first 4 + last 4 characters) to verify which token was resolved.

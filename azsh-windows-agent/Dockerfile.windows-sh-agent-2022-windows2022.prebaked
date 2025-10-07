@@ -1,0 +1,41 @@
+# Improved Dockerfile that pre-downloads the Azure Pipelines agent during build
+# This eliminates the need to download the agent at runtime, significantly improving
+# pod startup time and avoiding network congestion when multiple pods start simultaneously.
+
+FROM mcr.microsoft.com/windows/servercore:ltsc2022
+
+# Agent version as build argument (fetched dynamically by build script)
+ARG AGENT_VERSION=4.261.0
+
+# Install PowerShell requirements and set up environment
+WORKDIR /azp/
+
+# Pre-download the Azure Pipelines agent during build
+# The version is passed as a build argument and downloaded from Microsoft's CDN
+RUN powershell -Command " \
+    $ErrorActionPreference = 'Stop'; \
+    $ProgressPreference = 'SilentlyContinue'; \
+    $agentVersion = $env:AGENT_VERSION; \
+    Write-Host \"Downloading Azure Pipelines agent v${agentVersion}...\"; \
+    \
+    # Construct download URL for the specified version \
+    $downloadUrl = \"https://download.agent.dev.azure.com/agent/${agentVersion}/vsts-agent-win-x64-${agentVersion}.zip\"; \
+    Write-Host \"Download URL: $downloadUrl\"; \
+    \
+    # Download agent package \
+    Invoke-WebRequest -Uri $downloadUrl -OutFile 'C:\azp\agent.zip' -UseBasicParsing; \
+    Write-Host 'Agent downloaded. Extracting...'; \
+    \
+    # Create agent directory and extract \
+    New-Item -Path 'C:\azp\agent' -ItemType Directory -Force | Out-Null; \
+    Expand-Archive -Path 'C:\azp\agent.zip' -DestinationPath 'C:\azp\agent' -Force; \
+    \
+    # Clean up zip file to reduce image size \
+    Remove-Item 'C:\azp\agent.zip' -Force; \
+    Write-Host \"Agent v${agentVersion} extraction complete.\"; \
+    "
+
+# Copy the start script that will use the pre-downloaded agent
+COPY ./start-prebaked.ps1 ./start.ps1
+
+CMD powershell .\start.ps1

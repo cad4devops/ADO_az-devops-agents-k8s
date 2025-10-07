@@ -10,7 +10,13 @@ param(
     [Parameter(Mandatory = $false)]
     [switch]$DisableLatest,
     [Parameter(Mandatory = $false)]
-    [string]$DefaultAcr
+    [string]$DefaultAcr,
+    [Parameter(Mandatory = $false)]
+    [switch]$UsePrebaked = $true,
+    [Parameter(Mandatory = $false)]
+    [switch]$UseStandard,
+    [Parameter(Mandatory = $false)]
+    [string]$AgentVersion
 )
 
 function Invoke-WindowsBuild {
@@ -26,7 +32,13 @@ function Invoke-WindowsBuild {
         [Parameter(Mandatory = $false)]
         [switch]$DisableLatest,
         [Parameter(Mandatory = $true)]
-        [string]$DefaultAcr #'cragents003c66i4n7btfksg'
+        [string]$DefaultAcr, #'cragents003c66i4n7btfksg'
+        [Parameter(Mandatory = $false)]
+        [switch]$UsePrebaked = $true,
+        [Parameter(Mandatory = $false)]
+        [switch]$UseStandard,
+        [Parameter(Mandatory = $false)]
+        [string]$AgentVersion
     )
 
     $ErrorActionPreference = 'Stop'
@@ -91,16 +103,47 @@ function Invoke-WindowsBuild {
 
     $acrShort = $ContainerRegistryName.Split('.')[0]
 
+    # Determine build mode: UseStandard overrides default UsePrebaked
+    if ($UseStandard) {
+        $UsePrebaked = $false
+        Write-Host "Using STANDARD agent Dockerfiles (agent downloaded at runtime)" -ForegroundColor Yellow
+    } elseif ($UsePrebaked) {
+        Write-Host "Using PRE-BAKED agent Dockerfiles (agent downloaded at build time)" -ForegroundColor Magenta
+    }
+
+    # Fetch latest agent version if not specified
+    if ($UsePrebaked -and -not $AgentVersion) {
+        try {
+            Write-Host "Fetching latest Azure DevOps Agent version..." -ForegroundColor Cyan
+            $latestRelease = Invoke-RestMethod -Uri "https://api.github.com/repos/microsoft/azure-pipelines-agent/releases/latest" -Headers @{ "User-Agent" = "PowerShell" }
+            $AgentVersion = $latestRelease.tag_name -replace '^v', ''
+            Write-Host "Latest agent version: $AgentVersion" -ForegroundColor Green
+        }
+        catch {
+            Write-Warning "Failed to fetch latest agent version, falling back to 4.261.0: $_"
+            $AgentVersion = "4.261.0"
+        }
+    }
+
     # Log effective list of windows versions we will build
     Write-Host "Effective WindowsVersions: $($WindowsVersions -join ',')"
+    if ($UsePrebaked) {
+        Write-Host "Agent Version: $AgentVersion" -ForegroundColor Cyan
+    }
 
     foreach ($windowsVersion in $WindowsVersions) {
         $baseTag = "windows-${windowsVersion}"
         $finalTag = if ($TagSuffix) { "$baseTag-$TagSuffix" } else { $baseTag }
         $repositoryName = "windows-sh-agent-${windowsVersion}"
-        $dockerFileName = "./Dockerfile.${repositoryName}-windows${windowsVersion}"
-
-        Write-Host "Building Windows image ${repositoryName}:${finalTag}" -ForegroundColor Cyan
+        
+        # Choose Dockerfile based on prebaked flag
+        if ($UsePrebaked) {
+            $dockerFileName = "./Dockerfile.${repositoryName}-windows${windowsVersion}.prebaked"
+            Write-Host "Building PREBAKED Windows image ${repositoryName}:${finalTag} with agent v${AgentVersion}" -ForegroundColor Cyan
+        } else {
+            $dockerFileName = "./Dockerfile.${repositoryName}-windows${windowsVersion}"
+            Write-Host "Building STANDARD Windows image ${repositoryName}:${finalTag}" -ForegroundColor Cyan
+        }
 
         $tags = @(
             "${repositoryName}:${finalTag}",
@@ -118,7 +161,13 @@ function Invoke-WindowsBuild {
         $tagParams = @(); foreach ($t in $tags) { $tagParams += @('--tag', $t) }
 
         Write-Host "Running docker build with tags:`n  $($tags -join "`n  ")"
-        docker build @tagParams --file "$dockerFileName" .
+        
+        # Build with agent version as build arg for prebaked images
+        if ($UsePrebaked) {
+            docker build @tagParams --build-arg AGENT_VERSION=$AgentVersion --file "$dockerFileName" .
+        } else {
+            docker build @tagParams --file "$dockerFileName" .
+        }
 
         & az account show >$null 2>&1
         if ($LASTEXITCODE -ne 0) {
