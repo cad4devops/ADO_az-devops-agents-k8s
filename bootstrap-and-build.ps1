@@ -47,7 +47,10 @@ param(
     [Parameter(Mandatory = $false)][string]$ImageRefreshPipelineName = "$AzureDevOpsRepo-weekly-image-refresh",
     [Parameter(Mandatory = $false)][string]$RunOnPoolSamplePipelineName = "$AzureDevOpsRepo-run-on-selfhosted-pool-sample-helm",
     [Parameter(Mandatory = $false)][string]$DeployAksInfraPipelineName = "$AzureDevOpsRepo-deploy-aks-helm",
-    [Parameter(Mandatory = $false)][string]$KubeConfigSecretFile = "AKS_workload-cluster-$InstanceNumber-kubeconfig_file"
+    [Parameter(Mandatory = $false)][string]$KubeConfigSecretFile = "AKS_workload-cluster-$InstanceNumber-kubeconfig_file",
+    [Parameter(Mandatory = $false)][string]$UbuntuOnPremPoolName = "UbuntuLatestPoolOnPrem",
+    [Parameter(Mandatory = $false)][string]$WindowsOnPremPoolName = "WindowsLatestPoolOnPrem",
+    [Parameter(Mandatory = $false)][string]$UseOnPremAgents = "false"
 )
 
 Set-StrictMode -Version Latest
@@ -315,6 +318,9 @@ foreach ($tpl in $pipelineTemplates) {
         '__RUN_ON_POOL_SAMPLE_PIPELINE_NAME__' = $RunOnPoolSamplePipelineName
         '__KUBECONFIG_SECRET_FILE__'           = $KubeConfigSecretFile
         '__SKIP_CONTAINER_REGISTRY__'          = ($ContainerRegistryName -and -not [string]::IsNullOrWhiteSpace($ContainerRegistryName))
+        '__UBUNTU_ONPREM_POOL_NAME__'          = $UbuntuOnPremPoolName
+        '__WINDOWS_ONPREM_POOL_NAME__'         = $WindowsOnPremPoolName
+        '__USE_ONPREM_AGENTS__'                = $UseOnPremAgents
     }
     foreach ($k in $replacements.Keys) {
         $v = $replacements[$k]
