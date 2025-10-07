@@ -74,7 +74,7 @@ parameters:
     displayName: "Taint value to require on Windows nodes (default: 'Windows' to match Helm chart)"
   - name: useOnPremAgents
     type: boolean
-    default: true # Set to true to use on-premises agents, false to use cloud agents
+    default: __USE_ONPREM_AGENTS__ # Set to true to use on-premises agents, false to use cloud agents
 
 variables:
   - group: "__AZURE_DEVOPS_VARIABLE_GROUP__" # to get AZDO_PAT
@@ -90,14 +90,14 @@ stages:
         pool:
           ${{ if eq(parameters.useAzureLocal, false) }}:
             ${{ if eq(parameters.useOnPremAgents, true) }}:
-              name: UbuntuLatestPoolOnPrem
+              name: __UBUNTU_ONPREM_POOL_NAME__
             ${{ else }}:
               vmImage: ubuntu-latest
           ${{ else }}:
             ${{ if ne(parameters.bootstrapPoolName, '') }}:
               name: ${{ parameters.bootstrapPoolName }}
             ${{ else }}:
-              name: WindowsLatestPoolOnPrem
+              name: __WINDOWS_ONPREM_POOL_NAME__
         steps:
           - checkout: self
 
@@ -570,7 +570,7 @@ stages:
         condition: succeededOrFailed()
         pool:
           ${{ if parameters.useOnPremAgents }}:
-            name: UbuntuLatestPoolOnPrem
+            name: __UBUNTU_ONPREM_POOL_NAME__
           ${{ else }}:
             vmImage: ubuntu-latest
         steps:

@@ -19,7 +19,7 @@ parameters:
     default: 120
   - name: useOnPremAgents
     type: boolean
-    default: true # Set to true to use on-premises agents, false to use cloud agents
+    default: __USE_ONPREM_AGENTS__ # Set to true to use on-premises agents, false to use cloud agents
   - name: useAzureLocal
     type: boolean
     default: false
@@ -42,7 +42,7 @@ stages:
         displayName: Load configuration artifact
         pool:
           ${{ if parameters.useOnPremAgents }}:
-            name: UbuntuLatestPoolOnPrem
+            name: __UBUNTU_ONPREM_POOL_NAME__
           ${{ else }}:
             vmImage: ubuntu-latest
         steps:
@@ -92,7 +92,7 @@ stages:
         displayName: "Validate Linux self-hosted pool ($[ dependencies.LoadConfig.outputs['LoadConfig.ParseConfig.poolNameLinux'] ])"
         pool:
           ${{ if parameters.useOnPremAgents }}:
-            name: UbuntuLatestPoolOnPrem
+            name: __UBUNTU_ONPREM_POOL_NAME__
           ${{ else }}:
             vmImage: ubuntu-latest
         variables:
@@ -209,21 +209,21 @@ stages:
                 $useLocal = $false
                 if ('$(useAzureLocal)' -ne '') { $useLocal = '$(useAzureLocal)' -in @('True','true','1') }
                 $useLocalParam = if($useLocal) { 'true' } else { 'false' }
-                
+
                                       
                 # Determine branch to use for queuing the sample pipeline (defensive)
                 $branch = '$(resources.pipeline.deployAgentsHelm.sourceBranch)'
-                
+
                 # If the resource token was not expanded (literal $[...] or empty), fall back to Build.SourceBranch
                 if ($branch -like '$*' -or [string]::IsNullOrWhiteSpace($branch)) {
                   $branch = '$(Build.SourceBranch)'
                 }
-                
+
                 # Final fallback to a safe default if still empty
                 if ([string]::IsNullOrWhiteSpace($branch)) {
                   $branch = 'refs/heads/main'
                 }
-                
+
                 # Convert to short branch name (strip refs/heads/)
                 $branch = $branch -replace '^refs/heads/',''
                 # ...continue existing code that calls `az pipelines run --branch $branch`...
@@ -316,7 +316,7 @@ stages:
         displayName: "Validate Windows self-hosted pool ($[ dependencies.LoadConfig.outputs['LoadConfig.ParseConfig.poolNameWindows'] ])"
         pool:
           ${{ if parameters.useOnPremAgents }}:
-            name: UbuntuLatestPoolOnPrem
+            name: __UBUNTU_ONPREM_POOL_NAME__
           ${{ else }}:
             vmImage: ubuntu-latest
         variables:
@@ -432,26 +432,26 @@ stages:
                 if ('$(useAzureLocal)' -ne '') { $useLocal = '$(useAzureLocal)' -in @('True','true','1') }
                 $useLocalParam = if($useLocal) { 'true' } else { 'false' }
 
-                
+
                 # Determine branch to use for queuing the sample pipeline (defensive)
                 $branch = '$(resources.pipeline.deployAgentsHelm.sourceBranch)'
-                
+
                 # If the resource token was not expanded (literal $[...] or empty), fall back to Build.SourceBranch
                 if ($branch -like '$*' -or [string]::IsNullOrWhiteSpace($branch)) {
                   $branch = '$(Build.SourceBranch)'
                 }
-                
+
                 # Final fallback to a safe default if still empty
                 if ([string]::IsNullOrWhiteSpace($branch)) {
                   $branch = 'refs/heads/main'
                 }
-                
+
                 # Convert to short branch name (strip refs/heads/)
                 $branch = $branch -replace '^refs/heads/',''
-                
+
                 $runJson = & az pipelines run --name $pipelineName --branch $branch --parameters instanceNumber=$instance os=windows helloWaitSeconds=$(windowsHelloWaitSeconds) useAzureLocal=$useLocalParam --output json 2>&1
 
-                
+
                 if($LASTEXITCODE -ne 0){ Write-Error $runJson; throw 'Failed to queue sample pipeline run via az pipelines run' }
                 $runObj = $runJson | Out-String | ConvertFrom-Json
                 $runId = $runObj.id
@@ -544,7 +544,7 @@ stages:
         displayName: Validation Summary
         pool:
           ${{ if parameters.useOnPremAgents }}:
-            name: UbuntuLatestPoolOnPrem
+            name: __UBUNTU_ONPREM_POOL_NAME__
           ${{ else }}:
             vmImage: ubuntu-latest
         variables:
