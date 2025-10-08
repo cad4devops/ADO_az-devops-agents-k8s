@@ -26,14 +26,14 @@ schedules:
 parameters:
   - name: AZURE_SERVICE_CONNECTION
     type: string
-    default: "DOS_DevOpsShield_Prod"
+    default: "SvcConnRgScopedProd"
     values:
-      - "DOS_DevOpsShield_Prod"
+      - "SvcConnRgScopedProd"
   - name: ACR_NAME
     type: string
-    default: "devopsabcsrunners"
+    default: "cragents0036o3yuvhlr3ygc"
     values:
-      - "devopsabcsrunners"
+      - "cragents0036o3yuvhlr3ygc"
   - name: skipLinux
     type: boolean
     default: false
@@ -60,7 +60,7 @@ parameters:
     displayName: Fail pipeline if GitVersion fallback (date+sha) is used
   - name: useOnPremAgents
     type: boolean
-    default: true # Set to true to use on-premises agents, false to use cloud agents
+    default: false # Set to true to use on-premises agents, false to use cloud agents
 
 variables:
   - name: ACR_NAME
@@ -769,3 +769,4 @@ jobs:
         inputs:
           PathtoPublish: $(Pipeline.Workspace)
           ArtifactName: pipeline-workspace-dump
+
