@@ -3,15 +3,15 @@ Param(
     [Parameter(Mandatory = $false)][string]$ProjectName = 'Cad4DevOps',
     [Parameter(Mandatory = $false)][string]$RepositoryName = 'ADO_az-devops-agents-k8s',
     [Parameter(Mandatory = $false)][string]$AzdoPatSecretName = 'AZDO_PAT',
-    [Parameter(Mandatory = $false)][string]$VariableGroupName = 'ADO_az-devops-agents-k8s-003',
+    [Parameter(Mandatory = $false)][string]$VariableGroupName = '$RepositoryName-003',
     [Parameter(Mandatory = $false)][string]$KubeConfigSecretFile = "AKS_workload-cluster-003-kubeconfig_file",
-    [Parameter(Mandatory = $false)][string]$KubeConfigFilePath = "C:\Users\emmanuel.DEVOPSABCS.000\.kube\workload-cluster-003-kubeconfig.yaml",
-    [Parameter(Mandatory = $false)][string]$InstallPipelineName = "ADO_az-devops-agents-k8s-deploy-self-hosted-agents-helm",
-    [Parameter(Mandatory = $false)][string]$UninstallPipelineName = "ADO_az-devops-agents-k8s-uninstall-selfhosted-agents-helm",
-    [Parameter(Mandatory = $false)][string]$ValidatePipelineName = "ADO_az-devops-agents-k8s-validate-self-hosted-agents-helm",
-    [Parameter(Mandatory = $false)][string]$ImageRefreshPipelineName = "ADO_az-devops-agents-k8s-weekly-image-refresh",
-    [Parameter(Mandatory = $false)][string]$RunOnPoolSamplePipelineName = "ADO_az-devops-agents-k8s-run-on-selfhosted-pool-sample-helm",
-    [Parameter(Mandatory = $false)][string]$DeployAksInfraPipelineName = "ADO_az-devops-agents-k8s-deploy-aks-helm"
+    [Parameter(Mandatory = $false)][string]$KubeConfigFilePath = "$HOME\.kube\workload-cluster-003-kubeconfig.yaml",
+    [Parameter(Mandatory = $false)][string]$InstallPipelineName = "$RepositoryName-deploy-self-hosted-agents-helm",
+    [Parameter(Mandatory = $false)][string]$UninstallPipelineName = "$RepositoryName-uninstall-selfhosted-agents-helm",
+    [Parameter(Mandatory = $false)][string]$ValidatePipelineName = "$RepositoryName-validate-self-hosted-agents-helm",
+    [Parameter(Mandatory = $false)][string]$ImageRefreshPipelineName = "$RepositoryName-weekly-image-refresh",
+    [Parameter(Mandatory = $false)][string]$RunOnPoolSamplePipelineName = "$RepositoryName-run-on-selfhosted-pool-sample-helm",
+    [Parameter(Mandatory = $false)][string]$DeployAksInfraPipelineName = "$RepositoryName-deploy-aks-helm"
 )
 
 Set-StrictMode -Version Latest
