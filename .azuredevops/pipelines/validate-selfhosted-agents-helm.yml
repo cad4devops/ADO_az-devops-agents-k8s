@@ -19,20 +19,20 @@ parameters:
     default: 120
   - name: useOnPremAgents
     type: boolean
-    default: true # Set to true to use on-premises agents, false to use cloud agents
+    default: false # Set to true to use on-premises agents, false to use cloud agents
   - name: useAzureLocal
     type: boolean
     default: false
 resources:
   pipelines:
     - pipeline: deployAgentsHelm
-      source: ADO_az-devops-agents-k8s-deploy-self-hosted-agents-helm
+      source: DevOpsAgentswithK8S-deploy-self-hosted-agents-helm
       trigger: true # automatic trigger on successful run of source pipeline
 
 variables:
-  - group: "ADO_az-devops-agents-k8s-003" # to get AZDO_PAT
+  - group: "DevOpsAgentswithK8S-003" # to get AZDO_PAT
   - name: samplePipelineNameHelm
-    value: ADO_az-devops-agents-k8s-run-on-selfhosted-pool-sample-helm # changed to helm pipeline name
+    value: DevOpsAgentswithK8S-run-on-selfhosted-pool-sample-helm # changed to helm pipeline name
 
 stages:
   - stage: LoadConfig
@@ -606,3 +606,4 @@ stages:
                 $lines | Out-File $out -Encoding utf8
                 Write-Host "##vso[task.addattachment type=Distributedtask.Core.Summary;name=Agent Validation]$out"
                 $lines | ForEach-Object { Write-Host $_ }
+
