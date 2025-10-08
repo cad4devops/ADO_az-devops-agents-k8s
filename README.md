@@ -528,7 +528,7 @@ If you're an automated agent or contributor editing scripts or pipeline YAML, re
 
 * LinkedIn: [Emmanuel Knafo](https://www.linkedin.com/in/emmanuelknafo/)
 * LinkedIn: [AJ Enns](https://www.linkedin.com/in/ajenns/)
-* Issues: [GitHub Tracker](https://github.com/cad4devops/issues)
+* Issues: [GitHub Tracker](https://github.com/cad4devops/ADO_az-devops-agents-k8s/issues)
 
 - - -
 
