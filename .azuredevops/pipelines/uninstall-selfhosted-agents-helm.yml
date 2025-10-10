@@ -265,4 +265,3 @@ stages:
                 $lines | Out-File $path -Encoding utf8
                 Write-Host "##vso[task.addattachment type=Distributedtask.Core.Summary;name=Uninstall Summary]$path"
                 $lines | ForEach-Object { Write-Host $_ }
-

@@ -475,4 +475,3 @@ Write-Green "Bootstrap and build run completed. ACR: $acrShort, AKS: $aksName, R
 
 Write-Green "Remember to commite and push your upated pipeline .yml files in .azuredevops/pipelines. BEFORE running any of the created pipelines."
 exit 0
-

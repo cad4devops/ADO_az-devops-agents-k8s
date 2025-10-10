@@ -769,4 +769,3 @@ jobs:
         inputs:
           PathtoPublish: $(Pipeline.Workspace)
           ArtifactName: pipeline-workspace-dump
-

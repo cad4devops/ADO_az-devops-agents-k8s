@@ -52,4 +52,3 @@ stages:
               - template: ../scripts/kubernetes/windows/hello-world.yml
                 parameters:
                   helloWaitSeconds: ${{ parameters.helloWaitSeconds }}
-
