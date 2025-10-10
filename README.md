@@ -71,6 +71,7 @@ Recent enhancements (2025-10):
 * Added explicit parameter for `-SkipContainerRegistry` to the orchestrator to avoid referencing undeclared variables when rendering templates.
 * Normalized ACR short/FQDN handling and exports both as pipeline variables (`ACR_NAME`, `ACR_FQDN`).
 * Windows & Linux build steps now switch Docker Desktop engine automatically (when on Windows) and fall back gracefully if the Docker CLI helper is not present.
+* Workload Identity Federation automation hardened: early fail-fast creation of WIF Azure RM service connection, federated credential retries + CLI `--parameters` fallback, duplicate handling, and new `-UseAadIssuer` switch supporting the portal AAD issuer subject format. See `docs/WIF-AUTOMATION-CHANGES.md` and the WIF section in `docs/bootstrap-and-build.md`.
 
 Related local infrastructure helper improvements: `infra/scripts/AzureLocal/Manage-AksHci-WorkloadCluster.ps1` now provides:
 
