@@ -128,6 +128,38 @@ Key parameters
 - `-AzureDevOpsPatTokenEnvironmentVariableName` (optional): environment variable name for PAT (default: "AZDO_PAT").
 - Various pipeline name parameters for customizing created pipeline names.
 
+### Workload Identity Federation (WIF) Parameters
+
+The script can fail fast ensuring a WIF Azure RM service connection and its federated credential before image builds.
+
+| Parameter | Notes |
+|-----------|-------|
+| `-CreateWifServiceConnection` | Enables early ensure of the WIF service connection. Aborts before costly builds if creation/validation fails. |
+| `-CreateServicePrincipal` | Ensures Entra application & service principal exist (auto-enabled if no client id provided). |
+| `-ServicePrincipalClientId` | Existing app (client) id; if omitted and not disabled, app is created. |
+| `-TenantId` / `-SubscriptionId` | Required for service connection creation. |
+| `-UseAadIssuer` | Switch to use new issuer `https://login.microsoftonline.com/{tenantId}/v2.0` (must also supply exact portal subject). |
+| `-FederatedIssuer` | Override issuer (legacy default `https://vstoken.dev.azure.com/{org}` if `-UseAadIssuer` not set). |
+| `-FederatedSubject` | Legacy auto format: `sc://AzureAD/{projectId}/{serviceConnectionId}`. New portal format: `/eid1/c/pub/t/<token>/a/<token>/sc/{projectId}/{serviceConnectionId}` (must be supplied when using `-UseAadIssuer`). |
+| `-FederatedAudience` | Defaults to `api://AzureADTokenExchange`. |
+| `-FederatedCredentialMaxRetries` / `-FederatedCredentialRetrySecondsBase` | Control retry/backoff for federated credential creation. |
+| `-ProceedOnDuplicateNoVisibility` | Continue when SC exists but PAT cannot list it; skips credential unless subject can be computed/supplied. |
+| `-ExistingServiceConnectionId` | Provide known SC id when visibility missing to compute legacy subject. |
+| `-AssignSpContributorRole` | Idempotently ensures Contributor role for SP at subscription scope. |
+| `-DebugWifCreation` / `-DebugFederatedCredential` | Verbose payload & CLI outputs for troubleshooting. |
+| `-AutoRepairAzDevOpsExtension` | Detect/remove/reinstall broken azure-devops CLI extension. |
+
+Subject form guidance:
+
+```text
+Legacy (auto-computed): sc://AzureAD/<projectId>/<serviceConnectionId>
+Portal (AAD issuer):   /eid1/c/pub/t/<tenantToken>/a/<audToken>/sc/<projectId>/<serviceConnectionId>
+```
+
+The portal form contains dynamic `t/<tenantToken>/a/<audToken>` segments; you must copy it exactly from the Azure DevOps service connection UI when using `-UseAadIssuer`.
+
+Normalization: The script cleans leading/trailing backslashes or extra quotes (Oct 2025 hardening). A warning is emitted if the subject does not end with `/sc/<guid>/<guid>`.
+
 What it provisions
 
 - Bicep/Azure resources (if deploy helper is present and invoked).

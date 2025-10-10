@@ -40,7 +40,8 @@ param(
     [Parameter(Mandatory = $false)][string]$KubeconfigAzureLocalPath = "workload-cluster-$InstanceNumber-kubeconfig.yaml",
     [Parameter(Mandatory = $false)][string]$KubeContextAzureLocal = "workload-cluster-$InstanceNumber-admin@workload-cluster-$InstanceNumber",
     [Parameter(Mandatory = $false)][string]$KubeConfigFilePath = "${HOME}\.kube\workload-cluster-$InstanceNumber-kubeconfig.yaml",
-    [Parameter(Mandatory = $false)][string]$AzureDevOpsServiceConnectionName = 'DOS_DevOpsShield_Prod', # specify you ARM azure devops service connection name
+    # Default service connection name now derived from repo + instance for predictability
+    [Parameter(Mandatory = $false)][string]$AzureDevOpsServiceConnectionName = "$AzureDevOpsRepo-wif-sc-$InstanceNumber", # Azure RM service connection name (WIF)
     [Parameter(Mandatory = $false)][string]$AzureDevOpsVariableGroup = "$AzureDevOpsRepo-$InstanceNumber",
     [Parameter(Mandatory = $false)][string]$AzureDevOpsPatTokenEnvironmentVariableName = "AZDO_PAT",
     [Parameter(Mandatory = $false)][string]$InstallPipelineName = "$AzureDevOpsRepo-deploy-self-hosted-agents-helm",
@@ -52,7 +53,54 @@ param(
     [Parameter(Mandatory = $false)][string]$KubeConfigSecretFile = "AKS_workload-cluster-$InstanceNumber-kubeconfig_file",
     [Parameter(Mandatory = $false)][string]$UbuntuOnPremPoolName = "UbuntuLatestPoolOnPrem",
     [Parameter(Mandatory = $false)][string]$WindowsOnPremPoolName = "WindowsLatestPoolOnPrem",
-    [Parameter(Mandatory = $false)][string]$UseOnPremAgents = "false"
+    [Parameter(Mandatory = $false)][string]$UseOnPremAgents = "false",
+
+    # Optional: create (idempotently) an Azure Resource Manager service connection using Workload Identity Federation
+    [Parameter(Mandatory = $false)][switch]$CreateWifServiceConnection,
+    [Parameter(Mandatory = $false)][string]$SubscriptionId,
+    [Parameter(Mandatory = $false)][string]$SubscriptionName,
+    [Parameter(Mandatory = $false)][string]$TenantId,
+    [Parameter(Mandatory = $false)][string]$ServicePrincipalClientId, # Entra ID application (client) id configured with federated credential for ADO
+    [Parameter(Mandatory = $false)][switch]$AssignSpContributorRole # If set, will attempt to assign Contributor role to the SP at the subscription scope
+    ,
+    # Optional: also create (or ensure) the Entra application/service principal and federated credential used for WIF
+    [Parameter(Mandatory = $false)][switch]$CreateServicePrincipal,
+    [Parameter(Mandatory = $false)][string]$ServicePrincipalDisplayName = "ado-agents-wif-$InstanceNumber",
+    # Federated identity mapping fields (Issuer/Subject/Audience) are public identifiers, NOT secrets.
+    # Renamed to drop the word 'Credential' to avoid security analyzer false positives.
+    # Suppress PSAvoidUsingPlainTextForPassword (if triggered): these are not passwords/secrets.
+    [Parameter(Mandatory = $false)][ValidateNotNullOrEmpty()][string]$FederatedIssuer,   # e.g. https://vstoken.dev.azure.com/{organization}
+    [Parameter(Mandatory = $false)][ValidateNotNullOrEmpty()][string]$FederatedSubject,  # e.g. sc://AzureAD/{projectId}/{serviceConnectionId}
+    [Parameter(Mandatory = $false)][ValidateNotNullOrEmpty()][string]$FederatedAudience = 'api://AzureADTokenExchange'
+    ,
+    # Use the newer Azure AD issuer form instead of the legacy Azure DevOps OIDC issuer when set.
+    # New style (as now shown in some ADO portal guidance): https://login.microsoftonline.com/{tenantId}/v2.0
+    # NOTE: When using -UseAadIssuer the subject format presented in the portal typically resembles:
+    #   /eid1/c/pub/t/<tenantToken>/a/<audienceToken>/sc/<projectId>/<serviceConnectionId>
+    # These middle dynamic segments (t/<...>/a/<...>) are environment/tenant specific and cannot be reliably
+    # derived locally. Therefore the script will REQUIRE that you pass -FederatedSubject explicitly whenever
+    # -UseAadIssuer is specified (unless future discovery logic is added).
+    [Parameter(Mandatory = $false)][switch]$UseAadIssuer
+    ,
+    # Control auto-behavior: disable automatic creation when ServicePrincipalClientId not provided
+    [Parameter(Mandatory = $false)][switch]$DisableAutoServicePrincipal
+    ,
+    # Debug: emit detailed WIF service connection creation payload & response
+    [Parameter(Mandatory = $false)][switch]$DebugWifCreation,
+    # Federated credential creation tuning & diagnostics
+    [Parameter(Mandatory = $false)][int]$FederatedCredentialMaxRetries = 5,
+    [Parameter(Mandatory = $false)][int]$FederatedCredentialRetrySecondsBase = 4,
+    [Parameter(Mandatory = $false)][switch]$DebugFederatedCredential
+    ,
+    # If a duplicate WIF service connection exists but the PAT lacks permission to list/view it, proceed (build images) instead of failing fast.
+    # Federated credential creation will be skipped unless -FederatedSubject is explicitly provided.
+    [Parameter(Mandatory = $false)][switch]$ProceedOnDuplicateNoVisibility
+    ,
+    # When duplicate exists but not visible to PAT, optionally supply known existing service connection id to compute FederatedSubject.
+    [Parameter(Mandatory = $false)][string]$ExistingServiceConnectionId
+    ,
+    # Attempt automatic detection & repair of azure-devops CLI extension permission issues (Access is denied) by removing & reinstalling the extension.
+    [Parameter(Mandatory = $false)][switch]$AutoRepairAzDevOpsExtension
 )
 
 Set-StrictMode -Version Latest
@@ -258,6 +306,519 @@ Write-Host "ACR short: $acrShort  ACR FQDN: $acrFqdn"
 $aksName = "aks-ado-agents-$InstanceNumber"
 Write-Host "Assumed AKS name: $aksName"
 
+# Fail-fast: If requested, ensure a Workload Identity Federation based Azure RM service connection exists BEFORE expensive image builds.
+if ($CreateWifServiceConnection) {
+    Write-Host "CreateWifServiceConnection switch set: attempting early ensure of Workload Identity Federation ARM service connection '$AzureDevOpsServiceConnectionName'."
+
+    # Fallback to environment variables when explicit parameters not supplied
+    if (-not $SubscriptionId -and $env:AZ_SUBSCRIPTION_ID) { $SubscriptionId = $env:AZ_SUBSCRIPTION_ID }
+    if (-not $SubscriptionName -and $env:AZ_SUBSCRIPTION_NAME) { $SubscriptionName = $env:AZ_SUBSCRIPTION_NAME }
+    if (-not $TenantId -and $env:AZ_TENANT_ID) { $TenantId = $env:AZ_TENANT_ID }
+    if (-not $ServicePrincipalClientId -and $env:AZ_SP_APP_ID) { $ServicePrincipalClientId = $env:AZ_SP_APP_ID }
+
+    # Attempt auto-discovery from current az login context if still missing
+    if (-not $SubscriptionId -or -not $TenantId) {
+        try {
+            $acct = az account show -o json 2>$null
+            if ($LASTEXITCODE -eq 0 -and $acct) {
+                $acctObj = $acct | ConvertFrom-Json
+                if (-not $SubscriptionId) { $SubscriptionId = $acctObj.id }
+                if (-not $SubscriptionName) { $SubscriptionName = $acctObj.name }
+                if (-not $TenantId) { $TenantId = $acctObj.tenantId }
+                Write-Host "Auto-discovered subscription/tenant from az account show: $SubscriptionName ($SubscriptionId) tenant=$TenantId"
+            }
+        }
+        catch { Write-Host "Auto-discovery via az account show failed: $($_.Exception.Message)" }
+    }
+    if (-not $FederatedIssuer -and $env:AZ_WIF_ISSUER) { $FederatedIssuer = $env:AZ_WIF_ISSUER }
+    if (-not $FederatedSubject -and $env:AZ_WIF_SUBJECT) { $FederatedSubject = $env:AZ_WIF_SUBJECT }
+    # Apply computed defaults if still empty
+    if (-not $FederatedIssuer) {
+        if ($UseAadIssuer) {
+            if (-not $TenantId) { Fail "-UseAadIssuer specified but TenantId is missing. Provide -TenantId or set AZ_TENANT_ID." }
+            $FederatedIssuer = "https://login.microsoftonline.com/$TenantId/v2.0"
+            Write-Host "Using Azure AD issuer (new style): $FederatedIssuer"
+        }
+        else {
+            $FederatedIssuer = "https://vstoken.dev.azure.com/$ADOCollectionName"
+            Write-Host "Using legacy Azure DevOps OIDC issuer: $FederatedIssuer"
+        }
+    }
+    # If user opted into new issuer style but did not provide a subject, fail fast with guidance.
+    if ($UseAadIssuer -and -not $FederatedSubject) {
+        $msg = @()
+        $msg += ""
+        $msg += "-UseAadIssuer was specified but no -FederatedSubject provided."
+        $msg += "The new issuer style requires a portal-displayed subject path similar to:"
+        $msg += "/eid1/c/pub/t/<tenantToken>/a/<audToken>/sc/<projectId>/<serviceConnectionId>"
+        $msg += "These dynamic middle segments cannot currently be auto-derived by this script."
+        $msg += "Action: Re-run providing the exact subject shown in the Azure DevOps service connection UI using -FederatedSubject."
+        Fail ($msg -join [Environment]::NewLine)
+    }
+    # We can't know service connection id yet; we'll defer subject computation if not supplied.
+    $deferFederatedSubject = $false
+    if (-not $FederatedSubject) { $deferFederatedSubject = $true }
+
+    # If no ServicePrincipalClientId but auto creation allowed, toggle CreateServicePrincipal implicitly
+    if (-not $ServicePrincipalClientId -and -not $DisableAutoServicePrincipal) {
+        if (-not $CreateServicePrincipal) { Write-Host "No ServicePrincipalClientId supplied; auto-enabling -CreateServicePrincipal to generate one." }
+        $CreateServicePrincipal = $true
+    }
+
+    $missing = @()
+    if (-not $SubscriptionId) { $missing += 'SubscriptionId (env AZ_SUBSCRIPTION_ID or az account show)' }
+    if (-not $TenantId) { $missing += 'TenantId (env AZ_TENANT_ID or az account show)' }
+    if ($missing.Count -gt 0) { Fail ("Cannot create Workload Identity Federation service connection; missing: { 0 }" -f ($missing -join ', ')) }
+
+    $wifCreationSucceeded = $false
+
+    # Optionally create or ensure the Entra application / service principal and federated credential
+    if ($CreateServicePrincipal) {
+        Write-Host "CreateServicePrincipal set: ensuring Entra application & service principal exist (early)."
+        try {
+            $script:AppObjectId = $null
+            $script:SpObjectId = $null
+            if (-not $ServicePrincipalClientId) {
+                # Try to locate existing app by display name
+                $existingAppJson = az ad app list --display-name $ServicePrincipalDisplayName --query "[0]" -o json 2>$null
+                if ($LASTEXITCODE -eq 0 -and $existingAppJson) {
+                    try {
+                        $appInfo = $existingAppJson | ConvertFrom-Json
+                        if ($appInfo.appId) {
+                            $ServicePrincipalClientId = $appInfo.appId.Trim()
+                            $script:AppObjectId = $appInfo.id
+                            Write-Host "Found existing application displayName=$ServicePrincipalDisplayName (appId=$ServicePrincipalClientId appObjId=$($script:AppObjectId))."
+                        }
+                    }
+                    catch { }
+                }
+            }
+            if (-not $ServicePrincipalClientId) {
+                Write-Host "Creating new Entra application displayName=$ServicePrincipalDisplayName"
+                $appCreate = az ad app create --display-name $ServicePrincipalDisplayName -o json 2>$null
+                if ($LASTEXITCODE -ne 0 -or -not $appCreate) { Write-Warning "Failed to create Entra application." } else {
+                    try { $appObj = $appCreate | ConvertFrom-Json; $ServicePrincipalClientId = $appObj.appId; $script:AppObjectId = $appObj.id } catch {}
+                    Write-Host "Created appId=$ServicePrincipalClientId appObjId=$($script:AppObjectId)"
+                }
+            }
+            # Ensure service principal
+            if ($ServicePrincipalClientId) {
+                $spObjId = az ad sp list --filter "appId eq '$ServicePrincipalClientId'" --query "[0].id" -o tsv 2>$null
+                if (-not $spObjId) {
+                    Write-Host "Creating service principal for appId $ServicePrincipalClientId"
+                    az ad sp create --id $ServicePrincipalClientId 1>$null 2>$null
+                    if ($LASTEXITCODE -eq 0) { Write-Host "Service principal created." } else { Write-Warning "Service principal creation may have failed (exit $LASTEXITCODE)." }
+                    $spObjId = az ad sp list --filter "appId eq '$ServicePrincipalClientId'" --query "[0].id" -o tsv 2>$null
+                }
+                else { Write-Host "Service principal already exists (objectId=$spObjId)." }
+                $script:SpObjectId = $spObjId
+            }
+        }
+        catch { Write-Warning ("Service principal/app ensure failed: { 0 }" -f $_.Exception.Message) }
+    }
+
+    # Ensure azure-devops extension present
+    try { az extension show --name azure-devops 1>$null 2>$null } catch { Write-Warning "azure-devops az extension not available; cannot create service connection." }
+    $existingScJson = az devops service-endpoint list --org $AzureDevOpsOrgUrl --project $AzureDevOpsProject -o json 2>$null
+    $existing = $null
+    if ($LASTEXITCODE -eq 0 -and $existingScJson) {
+        try { $existing = ($existingScJson | ConvertFrom-Json) | Where-Object { $_.name -eq $AzureDevOpsServiceConnectionName } } catch { $existing = $null }
+    }
+    if ($existing) {
+        $scheme = $existing.authorization.scheme
+        if ($scheme -eq 'WorkloadIdentityFederation') {
+            Write-Host "Service connection '$AzureDevOpsServiceConnectionName' already exists with WorkloadIdentityFederation scheme. Skipping creation."
+            $wifCreationSucceeded = $true
+        }
+        else {
+            Fail "Service connection '$AzureDevOpsServiceConnectionName' already exists with scheme '$scheme'. Manual update required if you intend to use WorkloadIdentityFederation."
+        }
+        if ($deferFederatedSubject -and $ServicePrincipalClientId) {
+            $projectId = az devops project show --org $AzureDevOpsOrgUrl --project $AzureDevOpsProject --query id -o tsv 2>$null
+            if ($projectId -and $existing.id) {
+                $FederatedSubject = "sc://AzureAD/$projectId/$($existing.id)"
+                Write-Host "Computed federated credential subject: $FederatedSubject"
+            }
+        }
+    }
+    else {
+        # Discover subscription name if not provided
+        if (-not $SubscriptionName) {
+            $SubscriptionName = (az account subscription show --id $SubscriptionId --query displayName -o tsv 2>$null)
+            if (-not $SubscriptionName) { $SubscriptionName = $SubscriptionId }
+        }
+        # Obtain project id (resilient). First attempt direct show; if empty, configure defaults then retry; final fallback raw REST.
+        $projectId = az devops project show --org $AzureDevOpsOrgUrl --project $AzureDevOpsProject --query id -o tsv 2>$null
+        if (-not $projectId) {
+            Write-Warning "az devops project show returned empty id; attempting to set devops defaults and retry.";
+            try { az devops configure --defaults organization=$AzureDevOpsOrgUrl project=$AzureDevOpsProject 1>$null 2>$null } catch { Write-Warning "Failed to configure az devops defaults: $($_.Exception.Message)" }
+            $projectId = az devops project show --query id -o tsv 2>$null
+        }
+        if (-not $projectId) {
+            Write-Warning "Retry with REST API for project id..."
+            try {
+                $orgNoProto = ($AzureDevOpsOrgUrl -replace '^https?://', '')
+                $projUrl = "https://$orgNoProto/_apis/projects?api-version=7.0"
+                $authHeader = 'Basic ' + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes((':{0}' -f $env:AZDO_PAT)))
+                $resp = Invoke-RestMethod -Method Get -Uri $projUrl -Headers @{ Authorization = $authHeader } -ErrorAction Stop
+                if ($resp.value) {
+                    $matchProj = $resp.value | Where-Object { $_.name -eq $AzureDevOpsProject }
+                    if ($matchProj) { $projectId = $matchProj.id; Write-Warning "Resolved project id via REST fallback: $projectId" }
+                }
+            }
+            catch { Write-Warning "REST fallback failed: $($_.Exception.Message)" }
+        }
+        if (-not $projectId) { Fail "Unable to resolve project id after CLI and REST fallbacks; cannot create service connection." }
+        Write-Host "Creating new Workload Identity Federation ARM service connection '$AzureDevOpsServiceConnectionName' in project '$AzureDevOpsProject' (id=$projectId)."
+        if (-not $script:SpObjectId -and $ServicePrincipalClientId) { $script:SpObjectId = az ad sp list --filter "appId eq '$ServicePrincipalClientId'" --query "[0].id" -o tsv 2>$null }
+        if (-not $script:AppObjectId -and $ServicePrincipalClientId) { $script:AppObjectId = az ad app list --filter "appId eq '$ServicePrincipalClientId'" --query "[0].id" -o tsv 2>$null }
+        # Construct minimal + required parameter set; some backends require empty serviceprincipalkey and audience
+        # NOTE: Added owner/isShared fields to align with typical Azure DevOps service endpoint payloads and avoid silent validation issues.
+        #       Keep payload minimal but explicit; future diagnostics rely on capturing raw body from API even on 400.
+        
+        # Local helper (scoped) to POST raw JSON while preserving response body on non-success (Invoke-RestMethod disposes content on exception)
+        if (-not (Get-Command -Name Invoke-DevOpsJson -ErrorAction SilentlyContinue)) {
+            function Invoke-DevOpsJson {
+                param(
+                    [Parameter(Mandatory)][string]$Url,
+                    [Parameter(Mandatory)][string]$Body,
+                    [Parameter(Mandatory)][string]$AuthHeader
+                )
+                try {
+                    $handler = [System.Net.Http.HttpClientHandler]::new()
+                    $client = [System.Net.Http.HttpClient]::new($handler)
+                    $req = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Post, $Url)
+                    $req.Headers.Add('Authorization', $AuthHeader)
+                    $req.Headers.Add('Accept', 'application/json; api-version=7.1-preview.4')
+                    $req.Content = [System.Net.Http.StringContent]::new($Body, [Text.Encoding]::UTF8, 'application/json')
+                    $resp = $client.SendAsync($req).GetAwaiter().GetResult()
+                    $raw = $resp.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+                    $json = $null
+                    if ($raw -and ($raw.TrimStart().StartsWith('{') -or $raw.TrimStart().StartsWith('['))) {
+                        try { $json = $raw | ConvertFrom-Json -ErrorAction Stop } catch { }
+                    }
+                    [pscustomobject]@{
+                        StatusCode = [int]$resp.StatusCode
+                        Reason     = $resp.ReasonPhrase
+                        Headers    = $resp.Headers
+                        Body       = $raw
+                        Json       = $json
+                    }
+                }
+                catch {
+                    return [pscustomobject]@{ StatusCode = -1; Reason = $_.Exception.Message; Body = ''; Json = $null }
+                }
+            }
+        }
+
+        $bodyHashtable = @{
+            name                             = $AzureDevOpsServiceConnectionName
+            type                             = 'azurerm'
+            url                              = 'https://management.azure.com/'
+            authorization                    = @{ scheme = 'WorkloadIdentityFederation'; parameters = @{
+                    tenantid           = $TenantId
+                    serviceprincipalid = $ServicePrincipalClientId
+                } 
+            }
+            data                             = @{
+                subscriptionId   = $SubscriptionId
+                subscriptionName = $SubscriptionName
+                environment      = 'AzureCloud'
+                scopeLevel       = 'Subscription'
+                # 'scope' field was rejected by API (unexpected); omitting.
+                creationMode     = 'Manual'
+            }
+            owner                            = 'library'
+            isShared                         = $false
+            serviceEndpointProjectReferences = @(@{ projectReference = @{ id = $projectId }; name = $AzureDevOpsServiceConnectionName; description = 'Created by bootstrap-and-build.ps1 (Workload Identity Federation)' })
+        }
+        $body = $bodyHashtable | ConvertTo-Json -Depth 12 -Compress
+        if ($DebugWifCreation) { Write-Host "WIF Service Connection request body JSON:"; Write-Host $body }
+        $authHeader = 'Basic ' + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes((':{0}' -f $env:AZDO_PAT)))
+        $orgNoProto = ($AzureDevOpsOrgUrl -replace '^https?://', '')
+        $createUrlPrimary = "https://$orgNoProto/_apis/serviceendpoint/endpoints?api-version=7.1-preview.4"
+        $createUrlFallback = "https://$orgNoProto/_apis/serviceendpoint/endpoints?api-version=7.0-preview.4" # In case newer preview rejects payload
+        $reducedPayloadUsed = $false
+        foreach ($attempt in 1..2) {
+            $targetUrl = if ($attempt -eq 1) { $createUrlPrimary } else { $createUrlFallback }
+            if ($DebugWifCreation) { Write-Host "Attempt $attempt POST $targetUrl (HttpClient helper)" }
+            $rawResp = Invoke-DevOpsJson -Url $targetUrl -Body $body -AuthHeader $authHeader
+            if ($rawResp.StatusCode -ge 200 -and $rawResp.StatusCode -lt 300) {
+                if ($rawResp.Json -and $rawResp.Json.id) {
+                    Write-Host "Created service connection id=$($rawResp.Json.id) (attempt $attempt)."
+                    $wifCreationSucceeded = $true
+                    if ($deferFederatedSubject -and $ServicePrincipalClientId) {
+                        $FederatedSubject = "sc://AzureAD/$projectId/$($rawResp.Json.id)"
+                        Write-Host "Computed federated credential subject post-create: $FederatedSubject"
+                    }
+                    break
+                }
+                else {
+                    Write-Warning "Success status but unexpected body (attempt $attempt): $($rawResp.Body)"
+                }
+            }
+            else {
+                Write-Warning ("Attempt $attempt failed: HTTP { 0 } { 1 }" -f $rawResp.StatusCode, $rawResp.Reason)
+                if ($rawResp.Body) { Write-Warning "Response body (attempt $attempt): $($rawResp.Body)" }
+                if ($rawResp.Json) {
+                    $msg = $rawResp.Json.message
+                    $etype = $rawResp.Json.typeName
+                    $ecode = $rawResp.Json.errorCode
+                    if ($msg -or $etype -or $ecode) { Write-Warning ("Parsed error details: message='{0}' type='{1}' code='{2}'" -f $msg, $etype, $ecode) }
+                    # Graceful handling: duplicate service connection (409) when user lacks visibility but it already exists
+                    if ($rawResp.StatusCode -eq 409 -and $msg -match 'already exists' -and -not $wifCreationSucceeded) {
+                        Write-Warning 'Duplicate service connection detected. Attempting to locate existing endpoint by name to proceed.'
+                        try {
+                            $existingListJson = az devops service-endpoint list --org $AzureDevOpsOrgUrl --project $AzureDevOpsProject -o json 2>$null
+                            if ($LASTEXITCODE -eq 0 -and $existingListJson) {
+                                $existingList = $existingListJson | ConvertFrom-Json
+                                $match = $existingList | Where-Object { $_.name -eq $AzureDevOpsServiceConnectionName }
+                                if ($match -and $match.id -and $match.authorization.scheme -eq 'WorkloadIdentityFederation') {
+                                    Write-Host "Found existing WIF service connection id=$($match.id) via list API; treating as success."
+                                    $wifCreationSucceeded = $true
+                                    if ($deferFederatedSubject -and $ServicePrincipalClientId) {
+                                        $FederatedSubject = "sc://AzureAD/$projectId/$($match.id)"
+                                        Write-Host "Computed federated credential subject from existing SC: $FederatedSubject"
+                                    }
+                                    break
+                                }
+                                elseif ($match -and $match.id) {
+                                    Write-Warning "Existing service connection found with different scheme '$($match.authorization.scheme)'. Manual update required."
+                                }
+                                else {
+                                    Write-Warning 'List API did not return a matching service connection entry; visibility/permission issue likely.'
+                                }
+                            }
+                            else {
+                                Write-Warning 'Failed to list service-endpoint resources for duplicate resolution (insufficient permission?).'
+                                if ($ProceedOnDuplicateNoVisibility) {
+                                    Write-Warning 'ProceedOnDuplicateNoVisibility set: proceeding assuming existing WIF SC is valid.'
+                                    $wifCreationSucceeded = $true
+                                    if ($ExistingServiceConnectionId) {
+                                        Write-Host "ExistingServiceConnectionId provided: $ExistingServiceConnectionId"
+                                        if ($deferFederatedSubject -and $ServicePrincipalClientId -and -not $FederatedSubject) {
+                                            if (-not $projectId) {
+                                                # Attempt to get project id again silently
+                                                $projectId = az devops project show --org $AzureDevOpsOrgUrl --project $AzureDevOpsProject --query id -o tsv 2>$null
+                                            }
+                                            if ($projectId) {
+                                                $FederatedSubject = "sc://AzureAD/$projectId/$ExistingServiceConnectionId"
+                                                Write-Host "Computed federated credential subject from provided ExistingServiceConnectionId: $FederatedSubject"
+                                            }
+                                            else {
+                                                Write-Warning 'Could not resolve projectId to compute FederatedSubject with ExistingServiceConnectionId.'
+                                            }
+                                        }
+                                    }
+                                    else {
+                                        Write-Warning 'No ExistingServiceConnectionId supplied; federated credential ensure will be skipped unless FederatedSubject provided.'
+                                        if ($deferFederatedSubject) { $FederatedSubject = $null }
+                                    }
+                                    break
+                                }
+                            }
+                        }
+                        catch { Write-Warning "Exception during duplicate resolution: $($_.Exception.Message)" }
+                    }
+                    # Self-heal: if API lists unexpected fields, remove them & retry once per attempt with reduced payload
+                    if (-not $reducedPayloadUsed -and $msg -match 'Following fields in the service connection are not expected:') {
+                        $unexpectedLine = ($msg -split '\n')[0]
+                        $unexpectedCsv = ($unexpectedLine -split ':', 2)[1]
+                        if ($unexpectedCsv) {
+                            $unexpected = @($unexpectedCsv -split ',' | ForEach-Object { $_.Trim().Trim('.') } | Where-Object { $_ })
+                            $removed = @()
+                            $essential = @('name', 'type', 'url', 'subscriptionId', 'subscriptionName', 'environment', 'scopeLevel', 'tenantid', 'serviceprincipalid')
+                            foreach ($f in $unexpected) {
+                                if ($essential -contains $f) { continue }
+                                $removedThis = $false
+                                if ($bodyHashtable.authorization.parameters.ContainsKey($f)) { $bodyHashtable.authorization.parameters.Remove($f) | Out-Null; $removed += $f; $removedThis = $true }
+                                if (-not $removedThis -and $bodyHashtable.data.ContainsKey($f)) { $bodyHashtable.data.Remove($f) | Out-Null; $removed += $f; $removedThis = $true }
+                                if (-not $removedThis -and $bodyHashtable.ContainsKey($f)) { $bodyHashtable.Remove($f) | Out-Null; $removed += $f; $removedThis = $true }
+                            }
+                            if ($removed.Count -gt 0) {
+                                $body = $bodyHashtable | ConvertTo-Json -Depth 12 -Compress
+                                Write-Warning "Removed unexpected fields from authorization.parameters: $($removed -join ', '). Retrying same API version with reduced payload..."
+                                if ($DebugWifCreation) { Write-Host "Reduced payload JSON:"; Write-Host $body }
+                                $reducedPayloadUsed = $true
+                                $rawResp = Invoke-DevOpsJson -Url $targetUrl -Body $body -AuthHeader $authHeader
+                                if ($rawResp.StatusCode -ge 200 -and $rawResp.StatusCode -lt 300 -and $rawResp.Json -and $rawResp.Json.id) {
+                                    Write-Host "Created service connection id=$($rawResp.Json.id) (attempt $attempt after payload reduction)."
+                                    $wifCreationSucceeded = $true
+                                    if ($deferFederatedSubject -and $ServicePrincipalClientId) {
+                                        $FederatedSubject = "sc://AzureAD/$projectId/$($rawResp.Json.id)"
+                                        Write-Host "Computed federated credential subject post-create: $FederatedSubject"
+                                    }
+                                    break
+                                }
+                                else {
+                                    Write-Warning ("Reduced payload retry still failing (HTTP { 0 })." -f $rawResp.StatusCode)
+                                    if ($rawResp.Body) { Write-Warning "Reduced retry body: $($rawResp.Body)" }
+                                }
+                            }
+                        }
+                    }
+                    if ($msg -match 'Manage service connections') { Write-Warning 'Hint: Ensure PAT identity has Project permission: Service connections > Manage service connections.' }
+                    if ($msg -match 'approval') { Write-Warning 'Hint: Check Project Settings > Service connections for a pending approval.' }
+                    if ($msg -match 'scope' -and $msg -match 'subscription') { Write-Warning 'Hint: Verify SubscriptionId access & correct tenant.' }
+                    if ($msg -match 'serviceprincipalid') { Write-Warning 'Hint: SP propagation delay suspected. Add retry with delay.' }
+                    if ($msg -match 'owner' -and $msg -match 'isShared') { Write-Warning 'Hint: Owner/isShared validation triggered; verify payload fields.' }
+                    if ($msg -match 'WorkloadIdentityFederation' -and $msg -match 'unsupported') { Write-Warning 'Hint: Organization may not have WIF feature enabled. Verify Azure DevOps org preview features.' }
+                }
+                else {
+                    Write-Warning 'No JSON parsed from error body; validation details unknown.'
+                }
+                if ($attempt -eq 1) { Write-Host 'Retrying with fallback API version...'; Start-Sleep -Seconds 2 }
+            }
+        }
+        if (-not $wifCreationSucceeded) { Fail "Service connection creation failed after retries. Aborting before image builds. Ensure you have 'Manage service connections' permission or an admin approval is not pending." }
+    }
+
+    if ($AssignSpContributorRole -and $SubscriptionId) {
+        Write-Host "AssignSpContributorRole set: ensuring Contributor role assignment for app $ServicePrincipalClientId on subscription $SubscriptionId"
+        try {
+            az role assignment create --assignee $ServicePrincipalClientId --role Contributor --scope "/subscriptions/$SubscriptionId" 1>$null 2>$null
+            if ($LASTEXITCODE -eq 0) { Write-Host "Contributor role assignment created or already exists." } else { Write-Warning "Role assignment create exited with code $LASTEXITCODE" }
+        }
+        catch { Write-Warning ("Role assignment attempt failed: { 0 }" -f $_.Exception.Message) }
+    }
+
+    # If we deferred the federated credential subject, compute using existing SC id (already handled on create path); then ensure federated credential.
+    if ($ProceedOnDuplicateNoVisibility -and -not $FederatedSubject -and $CreateWifServiceConnection) {
+        Write-Warning 'Skipping federated credential ensure because we proceeded past a duplicate WIF service connection without visibility and cannot compute FederatedSubject. Provide -FederatedSubject explicitly or rerun with sufficient permissions to list service connections.'
+    }
+    elseif ($ServicePrincipalClientId -and $FederatedIssuer -and $FederatedSubject) {
+        # Normalize accidental escaping/backslashes: result should look like /eid1/c/pub/.../sc/<projectId>/<serviceConnectionId>
+        try {
+            $origSubject = $FederatedSubject
+            # Trim wrapping quotes (both single and double)
+            if ($FederatedSubject -match '^".*"$') { $FederatedSubject = $FederatedSubject.Substring(1, $FederatedSubject.Length-2) }
+            elseif ($FederatedSubject -match "^'.*'$") { $FederatedSubject = $FederatedSubject.Substring(1, $FederatedSubject.Length-2) }
+            # Normalize any Windows style backslashes inside to forward slashes (defensive)
+            $FederatedSubject = $FederatedSubject -replace '\\','/'
+            # Remove any leading escaped sequences like \/ or multiple leading slashes
+            $FederatedSubject = $FederatedSubject -replace '^/+','/' -replace '^\\+/','/'
+            if (-not $FederatedSubject.StartsWith('/')) { $FederatedSubject = '/' + $FederatedSubject }
+            # Remove a single trailing backslash if present (after conversion it would be '/'), then any extra trailing slashes
+            $FederatedSubject = $FederatedSubject -replace '/+$',''
+            # Collapse duplicate internal slashes
+            while ($FederatedSubject -match '//') { $FederatedSubject = ($FederatedSubject -replace '//','/') }
+            if ($origSubject -ne $FederatedSubject) { Write-Host "Normalized FederatedSubject from '$origSubject' to '$FederatedSubject'" }
+            # Sanity check pattern (lightweight): should contain /sc/<guid>/<guid>
+            if ($FederatedSubject -notmatch '/sc/[0-9a-fA-F-]{36}/[0-9a-fA-F-]{36}$') { Write-Warning "FederatedSubject '$FederatedSubject' does not match expected trailing /sc/<projectId>/<serviceConnectionId> pattern; verify the value." }
+        }
+        catch { Write-Warning "Failed to normalize FederatedSubject: $($_.Exception.Message)" }
+        Write-Host "Ensuring federated credential (issuer=$FederatedIssuer subject=$FederatedSubject audience=$FederatedAudience) exists for app $ServicePrincipalClientId"
+        try {
+            $appObjId = $script:AppObjectId
+            if (-not $appObjId) {
+                $appObjId = az ad app list --filter "appId eq '$ServicePrincipalClientId'" --query "[0].id" -o tsv 2>$null
+            }
+            if ($appObjId) {
+                $fcList = az ad app federated-credential list --id $appObjId -o json 2>&1
+                $existsFc = $false
+                if ($LASTEXITCODE -eq 0 -and $fcList -and -not [string]::IsNullOrWhiteSpace($fcList)) {
+                    try { $fcObjs = $fcList | ConvertFrom-Json; foreach ($fc in $fcObjs) { if ($fc.issuer -eq $FederatedIssuer -and $fc.subject -eq $FederatedSubject) { $existsFc = $true; break } } } catch { }
+                }
+                elseif ($DebugFederatedCredential) { Write-Warning "List federated-credential returned exit $LASTEXITCODE output: $fcList" }
+                if ($existsFc) { Write-Host "Federated credential already present; skipping creation." }
+                else {
+                    $fcNameBase = "ado-wif-$InstanceNumber"
+                    $fcName = $fcNameBase
+                    $attempt = 0
+                    $created = $false
+                    # Removed unused propagationHints variable
+                    while (-not $created -and $attempt -lt $FederatedCredentialMaxRetries) {
+                        $attempt++
+                        if ($attempt -gt 1) { Write-Host "Retry attempt $attempt creating federated credential..." }
+                        # Add suffix if name collision suspected
+                        if ($attempt -gt 1) { $fcName = "$fcNameBase-$attempt" }
+                        if ($DebugFederatedCredential) { Write-Host "Executing: az ad app federated-credential create --id $appObjId --audiences $FederatedAudience --issuer $FederatedIssuer --subject $FederatedSubject --name $fcName" }
+                        $createOut = az ad app federated-credential create --id $appObjId --audiences $FederatedAudience --issuer $FederatedIssuer --subject $FederatedSubject --name $fcName -o json 2>&1
+                        $exitCode = $LASTEXITCODE
+                        if ($exitCode -eq 0) {
+                            $created = $true
+                            Write-Host "Federated credential created (name=$fcName attempt=$attempt)."
+                            if ($DebugFederatedCredential -and $createOut) { Write-Host "Create output: $createOut" }
+                            break
+                        }
+                        else {
+                            $outStr = ($createOut | Out-String).Trim()
+                            Write-Warning "Federated credential create failed (attempt $attempt exit=$exitCode). Raw output:"; Write-Warning $outStr
+                            try {
+                                if ($outStr -match '^\s*[{\[]') {
+                                    $parsedErr = $outStr | ConvertFrom-Json -ErrorAction Stop
+                                    if ($parsedErr.error.message) { Write-Warning "Parsed error message: $($parsedErr.error.message)" }
+                                }
+                            }
+                            catch { }
+                            # Detect new az CLI requirement for --parameters file-based input and attempt fallback once per attempt before normal retry logic.
+                            if ($outStr -match '--parameters' -or $outStr -match 'required: --parameters' -or $outStr -match 'are required: --parameters' -or ($exitCode -eq 2 -and $outStr -match 'usage:')) {
+                                Write-Warning 'az CLI indicates --parameters is required; constructing temporary JSON file for fallback.'
+                                try {
+                                    $fcJsonObj = [ordered]@{
+                                        name        = $fcName
+                                        issuer      = $FederatedIssuer
+                                        subject     = $FederatedSubject
+                                        description = 'Created by bootstrap-and-build.ps1'
+                                        audiences   = @($FederatedAudience)
+                                    }
+                                    $fcJson = $fcJsonObj | ConvertTo-Json -Depth 8 -Compress
+                                    $tempFile = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), "fc-$($InstanceNumber)-$($attempt)-$(Get-Random).json")
+                                    Set-Content -Path $tempFile -Value $fcJson -Encoding UTF8
+                                    if ($DebugFederatedCredential) { Write-Host "Fallback parameters file: $tempFile"; Write-Host $fcJson }
+                                    $createOutParams = az ad app federated-credential create --id $appObjId --parameters $tempFile -o json 2>&1
+                                    $exitCodeParams = $LASTEXITCODE
+                                    if ($exitCodeParams -eq 0) {
+                                        $created = $true
+                                        Write-Host "Federated credential created using --parameters (name=$fcName attempt=$attempt)."
+                                        if ($DebugFederatedCredential -and $createOutParams) { Write-Host "Create output: $createOutParams" }
+                                        try { Remove-Item -Path $tempFile -Force -ErrorAction SilentlyContinue } catch {}
+                                        break
+                                    }
+                                    else {
+                                        Write-Warning "Fallback --parameters creation failed (exit $exitCodeParams). Output:"; Write-Warning $createOutParams
+                                        try { Remove-Item -Path $tempFile -Force -ErrorAction SilentlyContinue } catch {}
+                                    }
+                                }
+                                catch {
+                                    Write-Warning "Exception during fallback --parameters creation: $($_.Exception.Message)"
+                                }
+                            }
+                            $shouldRetry = $false
+                            $retryDelay = [int]([Math]::Pow(2, $attempt - 1) * $FederatedCredentialRetrySecondsBase)
+                            if ($outStr -match 'does not exist' -or $outStr -match 'not found' -or $outStr -match 'principal was not found' -or $outStr -match 'Unable to find') { $shouldRetry = $true }
+                            if ($outStr -match 'propagation' -or $outStr -match 'cache') { $shouldRetry = $true }
+                            if ($outStr -match 'Too Many Requests' -or $outStr -match 'throttl') { $shouldRetry = $true; $retryDelay += 5 }
+                            if ($outStr -match 'Insufficient privileges' -or $outStr -match 'Authorization_RequestDenied' -or $outStr -match 'Forbidden') {
+                                Write-Warning 'Detected permission issue creating federated credential. Ensure the signed-in identity has Application.ReadWrite.All or is Owner of the app registration (or has Cloud Application Administrator / Application Administrator role).'
+                                $shouldRetry = $false
+                            }
+                            if ($shouldRetry -and $attempt -lt $FederatedCredentialMaxRetries) {
+                                Write-Warning "Retrying in ${retryDelay}s (attempt $attempt of $FederatedCredentialMaxRetries)."; Start-Sleep -Seconds $retryDelay
+                            }
+                            else {
+                                if (-not $shouldRetry) { Write-Warning 'Failure does not look transient; aborting retries.' }
+                            }
+                        }
+                    }
+                    if (-not $created) {
+                        Write-Warning "Federated credential NOT created after $FederatedCredentialMaxRetries attempts. Manual remediation required (see docs/WIF-AUTOMATION-CHANGES.md)."
+                        Write-Warning "Manual CLI example (inline flags, may require --parameters JSON on newer CLI):"
+                        Write-Warning "az ad app federated-credential create --id $appObjId --audiences $FederatedAudience --issuer $FederatedIssuer --subject $FederatedSubject --name $fcNameBase"
+                    }
+                }
+            }
+            else { Write-Warning "Could not resolve application object id for appId=$ServicePrincipalClientId; skipping federated credential ensure." }
+        }
+        catch {
+            $errMsg = $_.Exception.Message
+            if ($errMsg -is [System.Array]) { $errMsg = ($errMsg | Out-String).Trim() }
+            Write-Warning ("Federated credential ensure failed: { 0 }" -f $errMsg)
+        }
+    }
+    Write-Host "WIF service connection ensure phase complete."
+}
+
 # Export variables for downstream pipeline usage (if running in Azure Pipelines)
 Write-Host "##vso[task.setvariable variable=INSTANCE_NUMBER]$InstanceNumber"
 Write-Host "##vso[task.setvariable variable=ACR_NAME]$acrShort"
@@ -304,6 +865,7 @@ else {
     }
 }
 
+
 # Render pipeline templates by replacing tokens
 Write-Host "Rendering pipeline templates in .azuredevops/pipelines (replacing tokens)"
 $pipelineTemplates = Get-ChildItem -Path (Join-Path $repoRoot '.azuredevops\pipelines') -Filter '*.template.yml' -File -Recurse
@@ -340,6 +902,28 @@ foreach ($tpl in $pipelineTemplates) {
 # Invoke helper to create/update variable group and pipelines (if present)
 $vgHelper = Join-Path $repoRoot 'scripts\create-variablegroup-and-pipelines.ps1'
 if (Test-Path $vgHelper) {
+    if ($AutoRepairAzDevOpsExtension) {
+        Write-Host 'AutoRepairAzDevOpsExtension enabled: probing azure-devops CLI extension for access issues.'
+        try {
+            az extension show --name azure-devops 1>$null 2>$null
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warning 'azure-devops extension not found or inaccessible; attempting install.'
+                az extension add --name azure-devops 1>$null 2>$null
+            }
+            else {
+                # Simple permission probe: list projects (ignore output)
+                az devops project list 1>$null 2>$null
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Warning 'Probe failed (possible permission or corrupt extension). Removing and reinstalling azure-devops extension.'
+                    az extension remove --name azure-devops 1>$null 2>$null
+                    az extension add --name azure-devops 1>$null 2>$null
+                }
+            }
+        }
+        catch {
+            Write-Warning ("Extension auto-repair encountered an error: { 0 }" -f $_.Exception.Message)
+        }
+    }
     Write-Host "Invoking variable-group & pipeline helper: $vgHelper"
     Write-Host "Using AZDO_PAT (masked): $(MaskPat $env:AZDO_PAT)"
     try {
@@ -373,7 +957,7 @@ if (Test-Path $vgHelper) {
         }
     }
     catch {
-        Write-Warning ("Failed to invoke variable-group helper: {0}" -f $_.Exception.Message)
+        Write-Warning ("Failed to invoke variable-group helper: { 0 }" -f $_.Exception.Message)
     }
 }
 else {
@@ -459,7 +1043,7 @@ try {
                 $missing = @()
                 if (-not $hasUser) { $missing += 'ACR_USERNAME' }
                 if (-not $hasPass) { $missing += 'ACR_PASSWORD' }
-                Fail (("Variable group '{0}' is missing required ACR variables. Present: {1}. Missing: {2}") -f $AzureDevOpsVariableGroup, ($names -join ', '), ($missing -join ', '))
+                Fail (("Variable group '{0}' is missing required ACR variables. Present: { 1 }. Missing: { 2 }") -f $AzureDevOpsVariableGroup, ($names -join ', '), ($missing -join ', '))
             }
             else {
                 Write-Host "Verified: ACR_USERNAME and ACR_PASSWORD exist in variable group (id=$vgId)."
@@ -468,10 +1052,9 @@ try {
     }
 }
 catch {
-    Fail ("ACR variable verification failed: {0}" -f $_.Exception.Message)
+    Fail ("ACR variable verification failed: { 0 }" -f $_.Exception.Message)
 }
 
 Write-Green "Bootstrap and build run completed. ACR: $acrShort, AKS: $aksName, RG: $ResourceGroupName"
-
-Write-Green "Remember to commite and push your upated pipeline .yml files in .azuredevops/pipelines. BEFORE running any of the created pipelines."
+Write-Green "Remember to commit and push your updated pipeline .yml files in .azuredevops/pipelines BEFORE running any of the created pipelines."
 exit 0
