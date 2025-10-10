@@ -728,4 +728,3 @@ stages:
               targetPath: "$(System.DefaultWorkingDirectory)/helm-applied-values.yaml"
               artifact: helm-applied-values
             condition: and(succeeded(), eq(variables['HelmAppliedValuesExists'], 'true'))
-

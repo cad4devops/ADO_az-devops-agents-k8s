@@ -606,4 +606,3 @@ stages:
                 $lines | Out-File $out -Encoding utf8
                 Write-Host "##vso[task.addattachment type=Distributedtask.Core.Summary;name=Agent Validation]$out"
                 $lines | ForEach-Object { Write-Host $_ }
-
