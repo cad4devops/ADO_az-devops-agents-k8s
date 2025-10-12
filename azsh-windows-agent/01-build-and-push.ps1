@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $false)]
-    [string[]]$WindowsVersions = @("2019", "2022", "2025"),
+    [string[]]$WindowsVersions = @("2022", "2025"),
     [Parameter(Mandatory = $false)]
     [string]$ContainerRegistryName = $env:ACR_NAME,
     [Parameter(Mandatory = $false)]
@@ -16,13 +16,15 @@ param(
     [Parameter(Mandatory = $false)]
     [switch]$UseStandard,
     [Parameter(Mandatory = $false)]
-    [string]$AgentVersion
+    [string]$AgentVersion,
+    [Parameter(Mandatory = $false)]
+    [switch]$EnableHypervFallback = $true
 )
 
 function Invoke-WindowsBuild {
     param(
         [Parameter(Mandatory = $false)]
-        [string[]]$WindowsVersions = @("2019", "2022", "2025"),
+        [string[]]$WindowsVersions = @("2022", "2025"),
         [Parameter(Mandatory = $false)]
         [string]$ContainerRegistryName = $env:ACR_NAME,
         [Parameter(Mandatory = $false)]
@@ -38,13 +40,54 @@ function Invoke-WindowsBuild {
         [Parameter(Mandatory = $false)]
         [switch]$UseStandard,
         [Parameter(Mandatory = $false)]
-        [string]$AgentVersion
+        [string]$AgentVersion,
+        [Parameter(Mandatory = $false)]
+        [switch]$EnableHypervFallback = $true
     )
 
     $ErrorActionPreference = 'Stop'
     # Reuse cross-platform green writer for CI-friendly logs
     function Write-Green([string]$msg) {
         try { if ($IsWindows) { Write-Host -ForegroundColor Green $msg } else { Write-Host "`e[32m$msg`e[0m" } } catch { Write-Host $msg }
+    }
+
+    function Test-HyperVIsolationSupport {
+        $featureInstalled = $false
+        $hypervisorPresent = $false
+
+        if (Get-Command Get-WindowsFeature -ErrorAction SilentlyContinue) {
+            try {
+                $feature = Get-WindowsFeature -Name Hyper-V -ErrorAction Stop
+                if ($feature -and $feature.InstallState -eq 'Installed') { $featureInstalled = $true }
+            }
+            catch { }
+        }
+        elseif (Get-Command Get-WindowsOptionalFeature -ErrorAction SilentlyContinue) {
+            try {
+                $opt = Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V-All -ErrorAction Stop
+                if ($opt -and $opt.State -eq 'Enabled') { $featureInstalled = $true }
+            }
+            catch { }
+        }
+
+        try {
+            $cs = Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop
+            if ($cs -and $cs.HypervisorPresent) { $hypervisorPresent = $true }
+        }
+        catch { }
+
+        return ($featureInstalled -and $hypervisorPresent)
+    }
+
+    function Invoke-DockerBuildCommand {
+        param(
+            [Parameter(Mandatory)][string[]]$Arguments,
+            [Parameter(Mandatory)][string]$FriendlyDescription
+        )
+        Write-Host ("Running docker {0}:`n  docker {1}" -f $FriendlyDescription, ($Arguments -join ' '))
+        & docker @Arguments 2>&1 | ForEach-Object { Write-Host $_ }
+        $exitCode = $LASTEXITCODE
+        return [int]$exitCode
     }
     # Debug: print incoming environment and parameter state so CI logs show exact inputs
     Write-Host "[DEBUG] env:WIN_VERSION='$($env:WIN_VERSION)'; env:WINDOWS_VERSIONS='$($env:WINDOWS_VERSIONS)'"
@@ -55,7 +98,7 @@ function Invoke-WindowsBuild {
     # 3) Job-level WINDOWS_VERSIONS env var
     # 4) Default parameter value (the script default)
     # Canonical default list string used to detect when the parameter contains the default
-    $canonicalDefault = '2019,2022,2025'
+    $canonicalDefault = '2022,2025'
 
     # 1) WIN_VERSION env var absolute precedence
     if ($env:WIN_VERSION) {
@@ -107,7 +150,8 @@ function Invoke-WindowsBuild {
     if ($UseStandard) {
         $UsePrebaked = $false
         Write-Host "Using STANDARD agent Dockerfiles (agent downloaded at runtime)" -ForegroundColor Yellow
-    } elseif ($UsePrebaked) {
+    }
+    elseif ($UsePrebaked) {
         Write-Host "Using PRE-BAKED agent Dockerfiles (agent downloaded at build time)" -ForegroundColor Magenta
     }
 
@@ -140,7 +184,8 @@ function Invoke-WindowsBuild {
         if ($UsePrebaked) {
             $dockerFileName = "./Dockerfile.${repositoryName}-windows${windowsVersion}.prebaked"
             Write-Host "Building PREBAKED Windows image ${repositoryName}:${finalTag} with agent v${AgentVersion}" -ForegroundColor Cyan
-        } else {
+        }
+        else {
             $dockerFileName = "./Dockerfile.${repositoryName}-windows${windowsVersion}"
             Write-Host "Building STANDARD Windows image ${repositoryName}:${finalTag}" -ForegroundColor Cyan
         }
@@ -150,6 +195,21 @@ function Invoke-WindowsBuild {
             "${ContainerRegistryName}/${repositoryName}:${finalTag}",
             "${ContainerRegistryName}/${repositoryName}:${baseTag}"
         )
+        if ($UsePrebaked -and $AgentVersion) {
+            $agentVersionSlug = ($AgentVersion.ToLowerInvariant() -replace '[^0-9a-z\.-]', '-').Trim('-')
+            if (-not $agentVersionSlug) { $agentVersionSlug = 'unknown' }
+
+            $finalAgentTag = "${finalTag}-agent-$agentVersionSlug"
+            $finalAgentRepoTag = "${ContainerRegistryName}/${repositoryName}:${finalAgentTag}"
+            $baseAgentTag = "${baseTag}-agent-$agentVersionSlug"
+            $baseAgentRepoTag = "${ContainerRegistryName}/${repositoryName}:${baseAgentTag}"
+
+            foreach ($agentTag in @("${repositoryName}:${finalAgentTag}", $finalAgentRepoTag, $baseAgentRepoTag)) {
+                if ($agentTag -and ($tags -notcontains $agentTag)) {
+                    $tags += $agentTag
+                }
+            }
+        }
         if ($SemVer -and $SemVer -match '^[0-9]+\.[0-9]+\.[0-9]+$') {
             $semverRepoTag = "${ContainerRegistryName}/${repositoryName}:$SemVer"
             if ($finalTag -ne $SemVer -and ($tags -notcontains $semverRepoTag)) {
@@ -162,11 +222,36 @@ function Invoke-WindowsBuild {
 
         Write-Host "Running docker build with tags:`n  $($tags -join "`n  ")"
         
-        # Build with agent version as build arg for prebaked images
-        if ($UsePrebaked) {
-            docker build @tagParams --build-arg AGENT_VERSION=$AgentVersion --file "$dockerFileName" .
-        } else {
-            docker build @tagParams --file "$dockerFileName" .
+        $dockerBuildArgs = @('build') + $tagParams
+        if ($UsePrebaked) { $dockerBuildArgs += @('--build-arg', "AGENT_VERSION=$AgentVersion") }
+        $dockerBuildArgs += @('--file', $dockerFileName, '.')
+
+        $buildExit = Invoke-DockerBuildCommand -Arguments $dockerBuildArgs -FriendlyDescription 'build'
+        $hypervRetried = $false
+        if ($buildExit -ne 0 -and $EnableHypervFallback) {
+            if (-not (Test-HyperVIsolationSupport)) {
+                Write-Warning "docker build failed with exit code $buildExit and Hyper-V isolation is not available on this host."
+                Write-Warning "Either enable Hyper-V with nested virtualization support or restrict WindowsVersions to host-compatible releases (for example 2022/2025)."
+                Write-Error "Cannot fall back to --isolation=hyperv on this machine."
+                return
+            }
+            $hypervRetried = $true
+            Write-Warning "docker build failed with exit code $buildExit. Retrying with --isolation=hyperv (requires Hyper-V feature and Windows 10/11 Pro/Enterprise or Windows Server)."
+            Start-Sleep -Seconds 5
+            $hypervArgs = @('build', '--isolation=hyperv') + $tagParams
+            if ($UsePrebaked) { $hypervArgs += @('--build-arg', "AGENT_VERSION=$AgentVersion") }
+            $hypervArgs += @('--file', $dockerFileName, '.')
+            $buildExit = Invoke-DockerBuildCommand -Arguments $hypervArgs -FriendlyDescription 'build --isolation=hyperv'
+        }
+
+        if ($buildExit -ne 0) {
+            if ($hypervRetried) {
+                Write-Error "docker build failed even with --isolation=hyperv (exit code $buildExit)."
+            }
+            else {
+                Write-Error "docker build failed with exit code $buildExit."
+            }
+            return
         }
 
         & az account show >$null 2>&1

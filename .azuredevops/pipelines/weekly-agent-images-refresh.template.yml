@@ -68,7 +68,7 @@ variables:
   - name: LINUX_REPOSITORY_NAME
     value: linux-sh-agent-docker
   - name: WINDOWS_VERSIONS
-    value: 2019,2022,2025
+    value: 2022,2025
   - name: AZURE_SERVICE_CONNECTION
     value: ${{ parameters.AZURE_SERVICE_CONNECTION }}
 
@@ -142,7 +142,7 @@ jobs:
                       git tag -a $tagName -m "Automated version tag $full"
                       $accessToken = $env:SYSTEM_ACCESSTOKEN
                       if([string]::IsNullOrWhiteSpace($accessToken)){
-                        Write-Warning 'SYSTEM_ACCESSTOKEN not available; cannot push tag (enable \"Allow scripts to access OAuth token\" or provide a PAT). Tag created locally only.'
+                        Write-Warning 'SYSTEM_ACCESSTOKEN not available; cannot push tag (enable "Allow scripts to access OAuth token" or provide a PAT). Tag created locally only.'
                       }
                       else {
                         try {
@@ -348,86 +348,6 @@ jobs:
             New-Item -ItemType Directory -Force -Path $(Pipeline.Workspace)/manifests | Out-Null
             ("{0}:{1}={2}" -f $repo,$tag,$digest) | Out-File $(Pipeline.Workspace)/manifests/linux-digest.txt -Encoding utf8
 
-  - job: WindowsAgentImage_2019
-    displayName: Windows Agent Image Build & Push (2019)
-    dependsOn: [Versioning, Preflight]
-    condition: and(succeeded(), eq(dependencies.Preflight.outputs['PreflightVars.ACR_READY'],'true'), eq(${{ parameters.skipWindows }}, false))
-    pool:
-      ${{ if parameters.useOnPremAgents }}:
-        name: __WINDOWS_ONPREM_POOL_NAME__
-      ${{ else }}:
-        vmImage: windows-latest
-    variables:
-      WIN_VERSION: "2019"
-      EFFECTIVE_TAG_SUFFIX: $[ dependencies.Versioning.outputs['SetSemVer.SEMVER_EFFECTIVE'] ]
-      DETECTED_ACR_CMD: $[ dependencies.Preflight.outputs['DetectAcrCommand.ACR_DIGEST_COMMAND'] ]
-    steps:
-      - checkout: self
-        clean: true
-      - pwsh: |
-          Write-Host "[WindowsAgentImage 2019] EFFECTIVE_TAG_SUFFIX=$env:EFFECTIVE_TAG_SUFFIX"
-          if(-not $env:EFFECTIVE_TAG_SUFFIX){ Write-Warning 'EFFECTIVE_TAG_SUFFIX is empty - semantic tag will not be added.' }
-        displayName: Debug tag suffix (Windows 2019)
-      - task: AzureCLI@2
-        name: BuildWindows2019
-        displayName: Run Windows build script (2019)
-        inputs:
-          azureSubscription: $(AZURE_SERVICE_CONNECTION)
-          scriptType: pscore
-          scriptLocation: scriptPath
-          scriptPath: azsh-windows-agent/01-build-and-push.ps1
-          arguments: -DefaultAcr $(ACR_NAME) -WindowsVersions $(WIN_VERSION)
-          workingDirectory: azsh-windows-agent
-          failOnStandardError: false
-        env:
-          ACR_NAME: $(ACR_NAME)
-          TAG_SUFFIX: $(EFFECTIVE_TAG_SUFFIX)
-          SEMVER_EFFECTIVE: $(EFFECTIVE_TAG_SUFFIX)
-          WINDOWS_VERSIONS: $(WIN_VERSION)
-          WIN_VERSION: $(WIN_VERSION)
-      - publish: azsh-windows-agent
-        artifact: windows-build-context-2019
-        condition: succeededOrFailed()
-      - task: AzureCLI@2
-        displayName: Capture Windows image digests (2019)
-        name: CaptureWindowsDigests2019
-        inputs:
-          azureSubscription: $(AZURE_SERVICE_CONNECTION)
-          scriptType: pscore
-          scriptLocation: inlineScript
-          failOnStandardError: false
-          inlineScript: |
-            $ErrorActionPreference='Stop'
-            $acrFqdn = "$(ACR_NAME)"; if(-not $acrFqdn){ Write-Error 'ACR_NAME empty'; exit 1 }
-            $acr = $acrFqdn.Split('.')[0]
-            $tag = '$(EFFECTIVE_TAG_SUFFIX)'
-            if(-not $tag){ Write-Warning 'No EFFECTIVE_TAG_SUFFIX provided; skipping digest capture.'; exit 0 }
-            # Only collect digest for this job's Windows version
-            $win = "$(WIN_VERSION)".Trim()
-            if(-not $win){ Write-Warning 'WIN_VERSION not set for this job; skipping.'; exit 0 }
-            $repo = "windows-sh-agent-$win"
-            New-Item -ItemType Directory -Force -Path $(Pipeline.Workspace)/manifests | Out-Null
-            Write-Host ("Collecting digest for {0}:{1}" -f $repo,$tag)
-            $digest = $null
-            $detected = "$(DETECTED_ACR_CMD)"
-            if([string]::IsNullOrWhiteSpace($detected)){
-              Write-Host 'No detected ACR_DIGEST_COMMAND from Preflight; using default show-manifests --repository'
-              $detected = "az acr repository show-manifests --name $acr --repository $repo --output json"
-            }
-            $jmes2 = "[?tags[?@=='{0}']].digest" -f $tag
-            $cmd = $detected.Replace('<acr>',$acr).Replace('<repo>',$repo)
-            if(-not ($cmd -match '--query')){ $cmd = "$cmd --query `"$jmes2`" -o tsv" }
-            $digest = bash -lc "$cmd" 2>&1 | Select-Object -First 1
-            if(-not $digest){
-              Write-Warning ("Digest not found for {0}:{1}" -f $repo,$tag)
-              $digestOut = ''
-            } else {
-              Write-Host ("Digest for {0}:{1} -> {2}" -f $repo,$tag,$digest)
-              $digestOut = $digest
-            }
-            ("{0}:{1}={2}" -f $repo,$tag,$digestOut) | Out-File $(Pipeline.Workspace)/manifests/windows-$win-digest.txt -Encoding utf8
-            Write-Host 'Windows digests collection complete.'
-
   - job: WindowsAgentImage_2022
     displayName: Windows Agent Image Build & Push (2022)
     dependsOn: [Versioning, Preflight]
@@ -597,7 +517,6 @@ jobs:
         Versioning,
         Preflight,
         LinuxAgentImage,
-        WindowsAgentImage_2019,
         WindowsAgentImage_2022,
         WindowsAgentImage_2025,
       ]

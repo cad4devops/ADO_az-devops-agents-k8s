@@ -30,12 +30,73 @@ catch { Fail "Invalid OrganizationUrl: $OrganizationUrl" }
 # Ensure az CLI is available and the azure-devops extension is installed
 $azCmd = Get-Command az -ErrorAction SilentlyContinue
 if (-not $azCmd) { Fail "Azure CLI 'az' not found in PATH. Install Azure CLI and the 'azure-devops' extension." }
+
+$azDevOpsExtensionEnsured = $false
+$extProbeError = $null
 try {
     az extension show --name azure-devops > $null 2> $null
-    if ($LASTEXITCODE -ne 0) { Fail "Azure DevOps az extension 'azure-devops' is not installed. Install with: az extension add --name azure-devops" }
+    if ($LASTEXITCODE -eq 0) { $azDevOpsExtensionEnsured = $true }
 }
 catch {
-    Fail ("Failed to query az extensions: {0}" -f $_.Exception.Message)
+    $extProbeError = $_.Exception.Message
+}
+
+if (-not $azDevOpsExtensionEnsured) {
+    Write-Warning "Azure DevOps az extension 'azure-devops' is not installed or inaccessible; attempting install."
+    try {
+        az extension add --name azure-devops 1>$null 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "Installed azure-devops extension via az CLI."
+            $azDevOpsExtensionEnsured = $true
+        }
+        else {
+            Write-Warning "Failed to install azure-devops extension (exit code $LASTEXITCODE)."
+        }
+    }
+    catch {
+        Write-Warning ("Failed to install azure-devops extension: {0}" -f $_.Exception.Message)
+        if (-not $extProbeError) { $extProbeError = $_.Exception.Message }
+    }
+}
+
+if (-not $azDevOpsExtensionEnsured) {
+    $failMessage = "Azure DevOps az extension 'azure-devops' is required but could not be installed automatically."
+    if ($extProbeError) { $failMessage += " Last error: $extProbeError" }
+    Fail $failMessage
+}
+
+# Resolve Azure DevOps PAT before making CLI calls that require authentication
+Write-Host "Resolving Azure DevOps PAT using secret name '$AzdoPatSecretName'..."
+$patPlain = $null
+$envPat = [Environment]::GetEnvironmentVariable($AzdoPatSecretName)
+if ($envPat -and $envPat.Trim() -ne '') {
+    Write-Host "Using environment variable '$AzdoPatSecretName' for PAT (from env)."
+    $patPlain = $envPat
+}
+else {
+    Write-Host "Please enter the AZDO PAT value (will be stored as a secret in the variable group):"
+    $pat = Read-Host -AsSecureString
+    if ($null -ne $pat) {
+        $patPlain = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($pat))
+    }
+}
+
+if ([string]::IsNullOrWhiteSpace($patPlain)) {
+    Fail "Azure DevOps PAT is required but was not provided. Set environment variable '$AzdoPatSecretName' or rerun with interactive input."
+}
+
+try {
+    Set-Item -Path Env:AZURE_DEVOPS_EXT_PAT -Value $patPlain
+    try { az devops logout --organization $OrganizationUrl 1>$null 2>$null } catch { }
+    Write-Host "Authenticating Azure DevOps CLI against $OrganizationUrl using provided PAT..."
+    $loginOutput = ($patPlain | az devops login --organization $OrganizationUrl 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        Fail ("Failed to authenticate to Azure DevOps organization {0} using provided PAT. Output: {1}" -f $OrganizationUrl, $loginOutput)
+    }
+    az devops configure --defaults organization=$OrganizationUrl project=$ProjectName 1>$null 2>$null
+}
+catch {
+    Fail ("Failed to configure Azure DevOps CLI authentication: {0}" -f $_.Exception.Message)
 }
 
 Write-Host "Verifying project exists..."
@@ -64,18 +125,6 @@ Write-Host "Creating or updating variable group '$VariableGroupName' with secret
 # Check if variable group exists
 $vgId = az pipelines variable-group list --org $OrganizationUrl --project $ProjectName --query "[?name=='$VariableGroupName'].id | [0]" -o tsv 2>$null
 if ($vgId) { Write-Host "Variable group exists (id=$vgId), will update." }
-
-# Prefer reading the PAT from an environment variable matching the secret name (non-interactive friendly)
-$envPat = [Environment]::GetEnvironmentVariable($AzdoPatSecretName)
-if ($envPat -and $envPat.Trim() -ne '') {
-    Write-Host "Using environment variable '$AzdoPatSecretName' for PAT (from env)."
-    $patPlain = $envPat
-}
-else {
-    Write-Host "Please enter the AZDO PAT value (will be stored as a secret in the variable group):"
-    $pat = Read-Host -AsSecureString
-    $patPlain = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($pat))
-}
 
 if (-not $vgId) {
     # Create variable group with initial secret
@@ -128,7 +177,7 @@ try {
         else {
             Write-Host "Uploading secure file using helper script: $helper"
             try {
-                $args = @(
+                $helperArgs = @(
                     '-NoProfile', '-File', $helper,
                     '-PAT', $patPlain,
                     '-AzureDevOpsOrg', $OrganizationUrl,
@@ -136,7 +185,7 @@ try {
                     '-SecureNameFile2Upload', $kubeSecretName,
                     '-SecureNameFilePath2Upload', $tempUploadPath
                 )
-                $out = & pwsh @args 2>&1
+                $out = & pwsh @helperArgs 2>&1
                 $rc = $LASTEXITCODE
                 if ($rc -eq 0) {
                     Write-Host "Secure file uploaded successfully via helper."

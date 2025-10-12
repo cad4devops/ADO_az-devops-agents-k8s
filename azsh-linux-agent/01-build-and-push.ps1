@@ -55,7 +55,8 @@ if (-not $BaseTag) { $BaseTag = "ubuntu-24.04" }
 if ($UseStandard) {
     $UsePrebaked = $false
     Write-Host "Using STANDARD agent Dockerfile (agent downloaded at runtime)" -ForegroundColor Yellow
-} elseif ($UsePrebaked) {
+}
+elseif ($UsePrebaked) {
     Write-Host "Using PRE-BAKED agent Dockerfile (agent downloaded at build time)" -ForegroundColor Magenta
 }
 
@@ -80,7 +81,8 @@ $FinalTag = if ($TagSuffix) { "$BaseTag-$TagSuffix" } else { $BaseTag }
 if ($UsePrebaked) {
     $dockerFileName = "./Dockerfile.${RepositoryName}.prebaked"
     Write-Host "Building PREBAKED Linux image: $RepositoryName with agent v${AgentVersion}" -ForegroundColor Cyan
-} else {
+}
+else {
     $dockerFileName = "./Dockerfile.${RepositoryName}"
     Write-Host "Building STANDARD Linux image: $RepositoryName" -ForegroundColor Cyan
 }
@@ -94,6 +96,22 @@ $tags = @(
     "${ContainerRegistryName}/${RepositoryName}:${FinalTag}",
     "${ContainerRegistryName}/${RepositoryName}:${BaseTag}"
 )
+
+if ($UsePrebaked -and $AgentVersion) {
+    $agentVersionSlug = ($AgentVersion.ToLowerInvariant() -replace '[^0-9a-z\.-]', '-').Trim('-')
+    if (-not $agentVersionSlug) { $agentVersionSlug = 'unknown' }
+
+    $finalAgentTag = "${FinalTag}-agent-$agentVersionSlug"
+    $finalAgentRepoTag = "${ContainerRegistryName}/${RepositoryName}:${finalAgentTag}"
+    $baseAgentTag = "${BaseTag}-agent-$agentVersionSlug"
+    $baseAgentRepoTag = "${ContainerRegistryName}/${RepositoryName}:${baseAgentTag}"
+
+    foreach ($agentTag in @("${RepositoryName}:${finalAgentTag}", $finalAgentRepoTag, $baseAgentRepoTag)) {
+        if ($agentTag -and ($tags -notcontains $agentTag)) {
+            $tags += $agentTag
+        }
+    }
+}
 
 # If SemVer looks like Major.Minor.Patch and isn't already identical to FinalTag, add an extra semantic tag
 if ($SemVer -and $SemVer -match '^[0-9]+\.[0-9]+\.[0-9]+$') {
@@ -114,7 +132,8 @@ Write-Host "Running docker build with tags:`n  $($tags -join "`n  ")"
 if ($UsePrebaked) {
     Write-Host "Agent Version: $AgentVersion" -ForegroundColor Cyan
     docker build @tagParams --build-arg AGENT_VERSION=$AgentVersion --file "$dockerFileName" .
-} else {
+}
+else {
     docker build @tagParams --file "$dockerFileName" .
 }
 

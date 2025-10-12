@@ -19,6 +19,20 @@ parameters:
   - name: WindowsNodeCount
     type: number
     default: 1
+  - name: LinuxVmSize
+    type: string
+    default: "Standard_D4s_v3"
+    values:
+      - "Standard_D4s_v3"
+      - "Standard_D8s_v3"
+      - "Standard_D16s_v3"
+  - name: WindowsVmSize
+    type: string
+    default: "Standard_D2s_v3"
+    values:
+      - "Standard_D2s_v3"
+      - "Standard_D4s_v3"
+      - "Standard_D8s_v3"
   - name: DeleteCluster
     type: boolean
     default: false
@@ -33,6 +47,10 @@ variables:
     value: ${{ parameters.LinuxNodeCount }}
   - name: WindowsNodeCount
     value: ${{ parameters.WindowsNodeCount }}
+  - name: LinuxVmSize
+    value: ${{ parameters.LinuxVmSize }}
+  - name: WindowsVmSize
+    value: ${{ parameters.WindowsVmSize }}
   - name: DeleteCluster
     value: ${{ parameters.DeleteCluster }}
 
@@ -60,6 +78,8 @@ stages:
                 $auto = [bool]('$(AutoApprove)')
                 $linuxCount = [int]('$(LinuxNodeCount)')
                 $windowsCount = [int]('$(WindowsNodeCount)')
+                $linuxVmSize = '$(LinuxVmSize)'
+                $windowsVmSize = '$(WindowsVmSize)'
                 $delete = [bool]('$(DeleteCluster)')
                 if ($delete) { Write-Host "DeleteCluster=true -> will skip kubeconfig upload task via condition" }
 
@@ -71,6 +91,8 @@ stages:
                 $args = @('-NoProfile','-ExecutionPolicy','Bypass','-File','./infra/scripts/AzureLocal/Manage-AksHci-WorkloadCluster.ps1', '-InstanceNumber',$instance,'-LinuxNodeCount',$linuxCount,'-WindowsNodeCount',$windowsCount,'-KubeConfigPath',$kubePath)
                 # Default to waiting for provisioning and collecting diagnostics on failure in CI runs
                 $args += '-WaitForProvisioning','-ProvisioningTimeoutMinutes','40','-CollectDiagnosticsOnFailure'
+                if ($linuxVmSize) { $args += '-LinuxNodeVmSize'; $args += $linuxVmSize }
+                if ($windowsVmSize) { $args += '-WindowsNodeVmSize'; $args += $windowsVmSize }
                 if ($auto) { $args += '-AutoApprove' }
                 if ($delete) { $args += '-DeleteCluster' }
 

@@ -20,9 +20,10 @@ Why use this script
 Prerequisites
 
 - PowerShell 7+ (pwsh) available on PATH.
-- Azure CLI (`az`) with `azure-devops` extension installed and configured (for AZ operations).
+- Azure CLI (`az`). The orchestrator now auto-detects, installs, and repairs the `azure-devops` extension on first run, so you no longer have to configure it manually.
 - **Azure DevOps Personal Access Token (PAT)** set as `AZDO_PAT` environment variable (required).
 - Docker (for building images) and appropriate host support (Windows Docker for Windows images) - optional if using `-BuildInPipeline`.
+- Windows PowerShell 5.x (only required when running with `-UseAzureLocal` to execute the AKS-HCI helper script).
 - A container registry (ACR) or provide `-ContainerRegistryName` to the script.
 - kubectl / helm not strictly required for the top-level script, but the deploy helper and Helm steps will need them when deploying into a cluster.
 
@@ -115,6 +116,7 @@ Key parameters
 
 - `-ContainerRegistryName` (optional): when present, uses this ACR and skips discovery.
 - `-BuildInPipeline` (optional switch): skip local Docker image builds; infrastructure and pipelines will be set up, but image builds are deferred to the weekly refresh pipeline. Use this when running the bootstrap script locally without Docker Desktop or when you prefer to build images in CI rather than locally.
+- `-UseAzureLocal` (optional switch): skip the Azure Bicep deployment and instead invoke `infra/scripts/AzureLocal/Manage-AksHci-WorkloadCluster.ps1` using Windows PowerShell 5.x to provision an AKS-HCI workload cluster. When enabled you must supply `-ContainerRegistryName`, because the helper does not create Azure resources.
 - `-SkipContainerRegistry` (optional switch): explicitly signal to skip ACR creation. This is implied automatically whenever `-ContainerRegistryName` is supplied. The orchestrator renders `__SKIP_CONTAINER_REGISTRY__` token values in pipeline templates as `True` or `False` accordingly.
 - `-EnableWindows` (switch): enable Windows images and builds.
 - `-ResourceGroupName` (optional): custom resource group name (defaults to `rg-aks-ado-agents-<InstanceNumber>`).
@@ -183,7 +185,7 @@ Behavioral notes & safety
 - Variable group JSON parsing is defensive and supports differing az CLI / extension return shapes (array, `variables` map, or flat object).
 - If an explicit `-ContainerRegistryName` is provided the deploy helper is invoked with `-SkipContainerRegistry` so the Bicep template will not attempt to create an ACR. (Bicep template exposes `skipContainerRegistry` parameter.)
 - After attempting to add ACR credentials to the Azure DevOps variable group, the orchestrator now performs a verification step (only when PAT present) to ensure `ACR_USERNAME` and `ACR_PASSWORD` exist; failure aborts early so dependent pipelines fail fast.
-- The Azure DevOps provisioning helper prefers environment variable `AZDO_PAT` for non-interactive runs. If not provided it will request a PAT interactively.
+- The Azure DevOps provisioning helper prefers environment variable `AZDO_PAT` for non-interactive runs. If not provided it will request a PAT interactively. When present, the helper will now sign in with the PAT using `az devops login`, emit the detected account/organization (with tenant ID), and fail fast on cross-tenant or empty PAT issues.
 - Secure-file upload uses a helper that will delete an existing secure-file with the same name and re-upload the provided kubeconfig.
 - Pipeline create/update uses the az CLI where possible; the helper omits brittle flags (like `--repository-type`) to remain compatible across extension versions.
 
@@ -220,6 +222,7 @@ Related docs
 | Robust parsing | Multi-shape variable-group JSON handling | Resilient across az CLI / extension versions |
 | Docker engine mgmt | Automatic engine switching on Windows hosts | Reduces manual Docker Desktop interaction |
 | Token rendering | `__SKIP_CONTAINER_REGISTRY__` token now deterministic | Pipelines can branch on registry creation logic |
+| Azure DevOps provisioning | Auto-installs/repairs `azure-devops` CLI extension, logs into org with masked PAT preview, surfaces tenant/org context before provisioning | Fewer bootstrap stalls caused by missing extension or mis-scoped PAT |
 
 
 - `docs/deploy-selfhosted-agents.md` — details the Helm deploy flow used by the deploy helper.

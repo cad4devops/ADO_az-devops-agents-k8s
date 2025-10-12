@@ -26,10 +26,12 @@ Cron: `0 2 * * 1` (Every Monday at 02:00 UTC) — defined under `schedules:` wit
    - Validates ACR existence & push/list permissions using the configured service connection. The preflight fails early if registry credentials are missing or insufficient.
 3. LinuxAgentImage job (conditional):
    - Builds & pushes Linux agent image with the effective tag suffix.
+   - Adds supplemental tags that embed the prebaked agent version (for example `ubuntu-24.04-<suffix>-agent-4.261.0`) when prebaked builds are enabled. Existing tags remain unchanged.
    - Captures image digest for traceability.
 4. Windows agent builds (conditional):
    - The pipeline builds Windows images for each configured Windows base version (2019/2022/2025). To improve concurrency and determinism the pipeline uses per-version jobs (for example `WindowsAgentImage_2019`, `WindowsAgentImage_2022`, `WindowsAgentImage_2025`) so each Windows variant can build in parallel.
    - Each job passes the explicit `-WindowsVersions $(WIN_VERSION)` argument into the `azsh-windows-agent/01-build-and-push.ps1` helper to ensure the correct Dockerfile and base image are selected.
+   - Adds supplemental tags that embed the prebaked agent version (for example `windows-2022-agent-4.261.0`) when prebaked builds are enabled, alongside the existing tag set.
    - Captures per‑version image digests (one file per job) to aid traceability.
 5. Summary job:
    - Lists recent repository tags (Linux + Windows) and prints collected digests.

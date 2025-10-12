@@ -12,11 +12,11 @@ This folder contains user and operator documentation for deploying, validating, 
 - `weekly-agent-pipeline.md` — Scheduled weekly prebaked image refresh
 - `QUICK-COMMANDS.md` — Common build/deploy commands
 
-Note: `validate-selfhosted-agents.md` and `deploy-selfhosted-agents.md` now support a `useOnPremAgents` boolean pipeline parameter to toggle whether CI jobs run on the repository's on‑prem pool (for example `UbuntuLatestPoolOnPrem`) or use the hosted `ubuntu-latest` pool. This parameter is separate from `useAzureLocal`, which controls where kubeconfig is sourced from.
+Note: `validate-selfhosted-agents.md` and `deploy-selfhosted-agents.md` now support a `useOnPremAgents` boolean pipeline parameter to toggle whether CI jobs run on the repository's on-prem pool (for example `UbuntuLatestPoolOnPrem`) or use the hosted `ubuntu-latest` pool. Even when the parameter is left false, the pipeline computes an effective flag so that setting `useAzureLocal: true` automatically runs the jobs on the on-prem pool.
 
 Important: `useAzureLocal` and kubeconfig handling
 
-- The deploy pipeline sets an explicit `USE_AZURE_LOCAL` environment variable and will pass `-UseAzureLocal` to the wrapper/script when `useAzureLocal` is true. This prevents accidentally inferring local mode from a `KUBECONFIG` value that may have been set by `az aks get-credentials` in non-local runs.
+- The deploy pipeline sets an explicit `USE_AZURE_LOCAL` environment variable and will pass `-UseAzureLocal` to the wrapper/script when `useAzureLocal` is true. This prevents accidentally inferring local mode from a `KUBECONFIG` value that may have been set by `az aks get-credentials` in non-local runs, and forces the pipeline to pick your on-prem pool.
 - The wrapper script `.azuredevops/scripts/run-deploy-selfhosted-agents-helm.ps1` honors the explicit `USE_AZURE_LOCAL` environment variable and only forwards `-UseAzureLocal` when the flag is truthy. The deploy helper script accepts `-Kubeconfig` and `-KubeconfigAzureLocal` and prefers the AzureLocal variant when local mode is requested.
 
 Subfolders

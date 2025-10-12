@@ -34,12 +34,6 @@ parameters:
   - name: useAzureLocal
     type: boolean
     default: false
-  - name: aksResourceGroup
-    type: string
-    default: "rg-aks-ado-agents-003"
-  - name: aksClusterName
-    type: string
-    default: "aks-ado-agents-003"
   - name: azureDevOpsOrgUrl
     type: string
     default: "https://dev.azure.com/devops-halo"
@@ -49,17 +43,7 @@ parameters:
   - name: bootstrapPoolName
     type: string
     default: "KubernetesPoolWindows"
-  - name: kubeconfigAzureLocal
-    type: string
-    default: "workload-cluster-003-kubeconfig.yaml"
-    displayName: Kubeconfig file name to use in Azure-local mode
-  - name: kubeContextAzureLocal
-    type: string
-    default: "workload-cluster-003-admin@workload-cluster-003"
-    displayName: Kube context name to verify in Azure-local mode
-  - name: kubeConfigSecretFile
-    type: string
-    default: "AKS_workload-cluster-003-kubeconfig_file"
+  # Removed hardcoded 003 from parameters, will calculate below
   - name: windowsNodeTaintKey
     type: string
     default: "sku"
@@ -78,8 +62,22 @@ parameters:
 
 variables:
   - group: "DevOpsAgentswithK8S-003" # to get AZDO_PAT
+  - name: instanceNumber
+    value: ${{ parameters.instanceNumber }}
+  - name: aksResourceGroup
+    value: rg-aks-ado-agents-${{ variables.instanceNumber }}
+  - name: aksClusterName
+    value: aks-ado-agents-${{ variables.instanceNumber }}
+  - name: kubeconfigAzureLocal
+    value: workload-cluster-${{ variables.instanceNumber }}-kubeconfig.yaml
+  - name: kubeContextAzureLocal
+    value: workload-cluster-${{ variables.instanceNumber }}-admin@workload-cluster-${{ variables.instanceNumber }}
+  - name: kubeConfigSecretFile
+    value: AKS_workload-cluster-${{ variables.instanceNumber }}-kubeconfig_file
   - name: azureSubscription
     value: ${{ parameters.AZURE_SERVICE_CONNECTION }}
+  - name: useOnPremAgentsEffective
+    value: ${{ or(parameters.useOnPremAgents, parameters.useAzureLocal) }}
 
 stages:
   - stage: DeployHelm
@@ -89,7 +87,7 @@ stages:
         displayName: Deploy agents Helm chart
         pool:
           ${{ if eq(parameters.useAzureLocal, false) }}:
-            ${{ if eq(parameters.useOnPremAgents, true) }}:
+            ${{ if eq(variables.useOnPremAgentsEffective, true) }}:
               name: UbuntuLatestPoolOnPrem
             ${{ else }}:
               vmImage: ubuntu-latest
@@ -106,7 +104,7 @@ stages:
                 name: DownloadKubeconfig
                 displayName: Download AKS kubeconfig (secure file)
                 inputs:
-                  secureFile: ${{ parameters.kubeConfigSecretFile }}
+                  secureFile: ${{ variables.kubeConfigSecretFile }}
           - ${{ if eq(parameters.useAzureLocal, false) }}:
               - task: AzureCLI@2
                 displayName: Fetch AKS credentials (az aks get-credentials)
@@ -482,8 +480,8 @@ stages:
               DEPLOY_WINDOWS: "${{ parameters.deployWindows }}"
               AZDO_ORG_URL: "${{ parameters.azureDevOpsOrgUrl }}"
               USE_AZURE_LOCAL: "${{ parameters.useAzureLocal }}"
-              KUBECONFIG_AZURE_LOCAL: "${{ parameters.kubeconfigAzureLocal }}"
-              KUBECONTEXT_AZURE_LOCAL: "${{ parameters.kubeContextAzureLocal }}"
+              KUBECONFIG_AZURE_LOCAL: "${{ variables.kubeconfigAzureLocal }}"
+              KUBECONTEXT_AZURE_LOCAL: "${{ variables.kubeContextAzureLocal }}"
             inputs:
               targetType: filePath
               ${{ if eq(parameters.useAzureLocal, true) }}:
@@ -569,7 +567,7 @@ stages:
         dependsOn: HelmDeploy
         condition: succeededOrFailed()
         pool:
-          ${{ if parameters.useOnPremAgents }}:
+          ${{ if variables.useOnPremAgentsEffective }}:
             name: UbuntuLatestPoolOnPrem
           ${{ else }}:
             vmImage: ubuntu-latest
