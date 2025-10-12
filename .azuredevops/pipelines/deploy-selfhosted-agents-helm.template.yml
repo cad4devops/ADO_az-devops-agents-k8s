@@ -76,8 +76,6 @@ variables:
     value: AKS_workload-cluster-${{ variables.instanceNumber }}-kubeconfig_file
   - name: azureSubscription
     value: ${{ parameters.AZURE_SERVICE_CONNECTION }}
-  - name: useOnPremAgentsEffective
-    value: ${{ or(parameters.useOnPremAgents, parameters.useAzureLocal) }}
 
 stages:
   - stage: DeployHelm
@@ -86,16 +84,15 @@ stages:
       - job: HelmDeploy
         displayName: Deploy agents Helm chart
         pool:
-          ${{ if eq(parameters.useAzureLocal, false) }}:
-            ${{ if eq(variables.useOnPremAgentsEffective, true) }}:
-              name: __UBUNTU_ONPREM_POOL_NAME__
-            ${{ else }}:
-              vmImage: ubuntu-latest
-          ${{ else }}:
+          ${{ if eq(parameters.useAzureLocal, true) }}:
             ${{ if ne(parameters.bootstrapPoolName, '') }}:
               name: ${{ parameters.bootstrapPoolName }}
             ${{ else }}:
               name: __WINDOWS_ONPREM_POOL_NAME__
+          ${{ if and(eq(parameters.useAzureLocal, false), eq(parameters.useOnPremAgents, true)) }}:
+            name: __UBUNTU_ONPREM_POOL_NAME__
+          ${{ if and(eq(parameters.useAzureLocal, false), ne(parameters.useOnPremAgents, true)) }}:
+            vmImage: ubuntu-latest
         steps:
           - checkout: self
 
@@ -114,13 +111,15 @@ stages:
                   scriptLocation: inlineScript
                   inlineScript: |
                     set -euo pipefail
-                    if [ -z "${{ parameters.aksResourceGroup }}" ] || [ -z "${{ parameters.aksClusterName }}" ]; then
+                    RG="$(aksResourceGroup)"
+                    CLUSTER="$(aksClusterName)"
+                    if [ -z "$RG" ] || [ -z "$CLUSTER" ]; then
                       echo "AKS resource group or cluster name not provided. Provide aksResourceGroup and aksClusterName when useAzureLocal is false."
                       exit 1
                     fi
                     KCFG="$AGENT_TEMPDIRECTORY/kubeconfig"
-                    echo "Fetching AKS credentials for ${{ parameters.aksClusterName }} in ${{ parameters.aksResourceGroup }} into $KCFG"
-                    az aks get-credentials --resource-group "${{ parameters.aksResourceGroup }}" --name "${{ parameters.aksClusterName }}" --file "$KCFG" --overwrite-existing
+                    echo "Fetching AKS credentials for $CLUSTER in $RG into $KCFG"
+                    az aks get-credentials --resource-group "$RG" --name "$CLUSTER" --file "$KCFG" --overwrite-existing
                     echo "##vso[task.setvariable variable=KUBECONFIG]$KCFG"
 
               - ${{ if eq(parameters.attachAcr, true) }}:
@@ -133,13 +132,13 @@ stages:
                       scriptLocation: inlineScript
                       inlineScript: |
                         set -euo pipefail
-                        if [ -z "${{ parameters.aksResourceGroup }}" ] || [ -z "${{ parameters.aksClusterName }}" ]; then
+                        RG="$(aksResourceGroup)"
+                        CLUSTER="$(aksClusterName)"
+                        if [ -z "$RG" ] || [ -z "$CLUSTER" ]; then
                           echo "AKS resource group or cluster name not provided. Provide aksResourceGroup and aksClusterName when useAzureLocal is false."
                           exit 1
                         fi
                         ACR_NAME="${{ parameters.ACR_NAME }}"
-                        RG="${{ parameters.aksResourceGroup }}"
-                        CLUSTER="${{ parameters.aksClusterName }}"
                         echo "Checking whether ACR '$ACR_NAME' is already attached to AKS cluster '$CLUSTER' in resource group '$RG'"
 
                         # Determine the cluster's principalId (managed identity) or fall back to service principal clientId
@@ -567,9 +566,9 @@ stages:
         dependsOn: HelmDeploy
         condition: succeededOrFailed()
         pool:
-          ${{ if variables.useOnPremAgentsEffective }}:
+          ${{ if or(eq(parameters.useAzureLocal, true), eq(parameters.useOnPremAgents, true)) }}:
             name: __UBUNTU_ONPREM_POOL_NAME__
-          ${{ else }}:
+          ${{ if and(ne(parameters.useAzureLocal, true), ne(parameters.useOnPremAgents, true)) }}:
             vmImage: ubuntu-latest
         steps:
           - task: PowerShell@2
