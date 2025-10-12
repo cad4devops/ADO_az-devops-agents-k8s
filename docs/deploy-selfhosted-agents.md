@@ -24,7 +24,7 @@ Prerequisites
 Inputs / Parameters (notable changes)
 
 - `kubeconfig` (optional): when not supplied the deploy helper will default to `$env:KUBECONFIG` or the standard user kubeconfig at `~/.kube/config`. This makes it easier to run the helper locally without re-specifying the kubeconfig path.
-- `useOnPremAgents` (boolean, pipeline parameter): controls which CI agent pool the pipeline's summary/validation tasks run on. When true the pipeline will prefer the repository's on‑prem pool name (for example `UbuntuLatestPoolOnPrem`) for jobs that must run inside your private CI environment; when false it will use the hosted `ubuntu-latest` image. This parameter is separate from `useAzureLocal` (which only controls where kubeconfig is sourced from).
+- `useOnPremAgents` (boolean, pipeline parameter): controls which CI agent pool the pipeline's summary/validation tasks run on. When true the pipeline will prefer the repository's on-prem pool name (for example `UbuntuLatestPoolOnPrem`) for jobs that must run inside your private CI environment; when false it will use the hosted `ubuntu-latest` image. The pipeline now computes an effective flag (`useOnPremAgentsEffective`) that is true whenever either `useOnPremAgents` **or** `useAzureLocal` is true, ensuring local-mode runs always target your on-prem pool.
 - `azDoToken` / AZDO_PAT fallback: If the pipeline parameter for an Azure DevOps token is not explicitly provided the helper accepts the environment variable `AZDO_PAT` as a fallback.
 - ACR credentials: the helper accepts `ACR_ADO_USERNAME` and `ACR_ADO_PASSWORD` from the environment. If one is supplied the other is required — the helper will fail fast on partial credential input to avoid ambiguous failures during image push/pull.
 - Prebaked images: expect **no** runtime agent download; startup logs should contain `Using pre-baked Azure Pipelines agent`.
@@ -71,10 +71,11 @@ Notes
 - For production, prefer external secret management (AKV CSI driver) instead of baking secrets into CI variables.
 - The exact parameter names and steps vary per repo version — consult the pipeline YAML for precise behavior.
 
-Notes on pool selection
+## Notes on pool selection
 
-- `useAzureLocal` controls where the pipeline sources the cluster kubeconfig: when true it expects a secure-file kubeconfig (local/on‑prem); when false it will attempt `az aks get-credentials` for AKS clusters.
-- `useOnPremAgents` controls which pipeline pool the jobs run on (on‑prem pool vs hosted images). Set `useOnPremAgents: true` when you want validation or summary tasks to run on your internal on‑prem pool so they exercise the same agent environment your workloads will use.
+- `useAzureLocal` controls where the pipeline sources the cluster kubeconfig: when true it expects a secure-file kubeconfig (local/on-prem); when false it will attempt `az aks get-credentials` for AKS clusters.
+- `useOnPremAgents` controls which pipeline pool the jobs run on (on-prem pool vs hosted images). Set `useOnPremAgents: true` when you want validation or summary tasks to run on your internal on-prem pool so they exercise the same agent environment your workloads will use.
+- The deploy pipeline treats `useAzureLocal` as an implicit request for your on-prem pool. Even if `useOnPremAgents` is left false, the jobs will still run on your custom pool whenever `useAzureLocal` is true so that local clusters avoid hosted agents entirely.
 
 Wrapper & kubeconfig selection (current behavior)
 

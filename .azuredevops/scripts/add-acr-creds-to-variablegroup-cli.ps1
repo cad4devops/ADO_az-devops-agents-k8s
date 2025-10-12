@@ -35,6 +35,28 @@ if (-not (Get-Command az -ErrorAction SilentlyContinue)) {
     Write-Error 'Azure CLI (az) not found on PATH. Please install Azure CLI.'; exit 1
 }
 
+# Capture active Azure account context for debugging and to ensure login is present
+Write-Host "Inspecting current Azure CLI account context (az account show)..."
+$accountContext = $null
+try {
+    $accountJson = az account show -o json 2>$null
+    if ($LASTEXITCODE -eq 0 -and $accountJson) {
+        $accountContext = $accountJson | ConvertFrom-Json
+        Write-Host ("  Subscription: {0} ({1})" -f $accountContext.name, $accountContext.id)
+        Write-Host ("  Tenant: {0}" -f $accountContext.tenantId)
+        if ($accountContext.user) {
+            Write-Host ("  Logged in as: {0} ({1})" -f $accountContext.user.name, $accountContext.user.type)
+        }
+    }
+    else {
+        throw "az account show returned no data"
+    }
+}
+catch {
+    Write-Error "Unable to determine Azure CLI login context. Run 'az login' (or configure service principal/managed identity login) before executing this script. Original error: $($_.Exception.Message)"
+    exit 1
+}
+
 # Get ACR credentials using Azure CLI
 Write-Host "Fetching ACR admin credentials for '$AcrName'..."
 try {
@@ -51,6 +73,16 @@ try {
 catch {
     Write-Error "Failed to fetch ACR credentials: $($_.Exception.Message)"
     exit 1
+}
+
+# Export credentials to environment variables for downstream steps if needed
+try {
+    Set-Item -Path Env:ACR_USERNAME -Value $acrUsername -ErrorAction Stop
+    Set-Item -Path Env:ACR_PASSWORD -Value $acrPassword -ErrorAction Stop
+    Write-Host "Exported ACR credentials to environment variables 'ACR_USERNAME' and 'ACR_PASSWORD'."
+}
+catch {
+    Write-Warning "Failed to export ACR credentials to environment variables: $($_.Exception.Message)"
 }
 
 # Find the variable group

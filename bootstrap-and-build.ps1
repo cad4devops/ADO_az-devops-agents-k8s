@@ -54,6 +54,7 @@ param(
     [Parameter(Mandatory = $false)][string]$UbuntuOnPremPoolName = "UbuntuLatestPoolOnPrem",
     [Parameter(Mandatory = $false)][string]$WindowsOnPremPoolName = "WindowsLatestPoolOnPrem",
     [Parameter(Mandatory = $false)][string]$UseOnPremAgents = "false",
+    [Parameter(Mandatory = $false)][switch]$UseAzureLocal,
 
     # Optional: create (idempotently) an Azure Resource Manager service connection using Workload Identity Federation
     [Parameter(Mandatory = $false)][switch]$CreateWifServiceConnection,
@@ -105,6 +106,39 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+# Normalize $IsWindows for both PowerShell Core and Windows PowerShell.
+# Strict mode requires that we explicitly set it when the automatic variable is unavailable (e.g. Windows PowerShell 5.x).
+$resolvedIsWindows = $null
+foreach ($scope in 'Script', 'Global') {
+    try {
+        $var = Get-Variable -Name IsWindows -Scope $scope -ErrorAction Stop
+        if ($null -ne $var) {
+            $value = $var.Value
+            if ($value -is [bool]) {
+                $resolvedIsWindows = $value
+            }
+            elseif ($null -ne $value) {
+                try { $resolvedIsWindows = [System.Convert]::ToBoolean($value) } catch { $resolvedIsWindows = $null }
+            }
+            if ($null -ne $resolvedIsWindows) { break }
+        }
+    }
+    catch { }
+}
+if ($null -eq $resolvedIsWindows) {
+    try {
+        $resolvedIsWindows = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
+    }
+    catch {
+        try {
+            $resolvedIsWindows = [bool]([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT)
+        }
+        catch { $resolvedIsWindows = $false }
+    }
+}
+Set-Variable -Name IsWindows -Scope Script -Value ([bool]$resolvedIsWindows) -Force
+
 
 # Load .env file if it exists (before validation)
 $envFile = Join-Path $PSScriptRoot '.env'
@@ -184,7 +218,7 @@ See docs/bootstrap-env.md for detailed PAT creation instructions.
 Write-Host "AZDO_PAT validation passed (masked): $(MaskPat $env:AZDO_PAT)"
 
 # Switch Docker Desktop engine between linux and windows on Windows hosts when available
-function Switch-DockerEngine([ValidateSet('linux', 'windows')][string]$target, [int]$timeoutSeconds = 60) {
+function Switch-DockerEngine([ValidateSet('linux', 'windows')][string]$target, [int]$timeoutSeconds = 60, [int]$postSwitchDelaySeconds = 0) {
     if (-not $IsWindows) { Write-Host "Not on Windows host; skipping Docker engine switch to '$target'"; return }
     $dockerCmd = Get-Command docker -ErrorAction SilentlyContinue
     if (-not $dockerCmd) { Write-Warning "docker CLI not found; cannot check engine. Skipping switch."; return }
@@ -206,7 +240,14 @@ function Switch-DockerEngine([ValidateSet('linux', 'windows')][string]$target, [
             Start-Sleep -Seconds 2
             try {
                 $ostype = (& docker info --format '{{.OSType}}' 2>$null).Trim()
-                if ($ostype -eq $target) { Write-Host "Docker engine now reports OSType='$ostype'"; return }
+                if ($ostype -eq $target) {
+                    Write-Host "Docker engine now reports OSType='$ostype'"
+                    if ($postSwitchDelaySeconds -gt 0) {
+                        Write-Host "Waiting $postSwitchDelaySeconds seconds for Docker engine to stabilize..."
+                        Start-Sleep -Seconds $postSwitchDelaySeconds
+                    }
+                    return
+                }
             }
             catch {
                 # ignore transient errors while Docker restarts
@@ -216,6 +257,10 @@ function Switch-DockerEngine([ValidateSet('linux', 'windows')][string]$target, [
     }
     else {
         Write-Warning "Docker Desktop CLI (DockerCli.exe) not found under Program Files; attempting to set DOCKER_DEFAULT_PLATFORM for the upcoming build as a fallback."
+        if ($postSwitchDelaySeconds -gt 0) {
+            Write-Host "Waiting $postSwitchDelaySeconds seconds before continuing build steps..."
+            Start-Sleep -Seconds $postSwitchDelaySeconds
+        }
     }
 }
 
@@ -227,52 +272,119 @@ $repoRoot = Resolve-Path (Join-Path $scriptRoot '.')
 Write-Host "Script root: $scriptRoot"
 Write-Host "Repo root  : $repoRoot"
 
+# Validate parameter combinations early
+if ($UseAzureLocal.IsPresent -and [string]::IsNullOrWhiteSpace($ContainerRegistryName)) {
+    Fail "-UseAzureLocal requires that you also provide -ContainerRegistryName because the Azure Local helper does not create an ACR."
+}
+
 # Default ResourceGroupName if not provided
 if (-not $ResourceGroupName -or [string]::IsNullOrWhiteSpace($ResourceGroupName)) {
     $ResourceGroupName = "rg-aks-ado-agents-$InstanceNumber"
     Write-Host "No ResourceGroupName provided. Defaulting to: $ResourceGroupName"
 }
 
-# Deploy infra by invoking the bicep deploy helper
-$deployScript = Join-Path $repoRoot 'infra\bicep\deploy.ps1'
-if (-not (Test-Path $deployScript)) { Fail "Deploy script not found at $deployScript" }
-
-Write-Host "Invoking infra deploy: $deployScript"
-
-$deployArgs = @(
-    '-InstanceNumber', $InstanceNumber,
-    '-Location', $Location,
-    '-ResourceGroupName', $ResourceGroupName,
-    '-WindowsNodeCount', [string]$WindowsNodeCount,
-    '-LinuxNodeCount', [string]$LinuxNodeCount,
-    '-LinuxVmSize', $LinuxVmSize,
-    '-WindowsVmSize', $WindowsVmSize
-)
-if ($EnableWindows.IsPresent) { $deployArgs += '-EnableWindows'; $deployArgs += $true }
-if ($ContainerRegistryName) { $deployArgs += '-ContainerRegistryName'; $deployArgs += $ContainerRegistryName }
-if ($ContainerRegistryName) { $deployArgs += '-SkipContainerRegistry'; }
-
-# Capture output (stdout + stderr) for parsing
-Write-Host "Running deploy.ps1 with: $($deployArgs -join ' ')"
-$rawOut = & pwsh -NoProfile -NonInteractive -File $deployScript @deployArgs 2>&1
-if ($LASTEXITCODE -ne 0) { Write-Warning "deploy.ps1 exited with code $LASTEXITCODE; output may contain partial information." }
-
-# Attempt to extract the JSON that the deploy script prints after 'Deployment outputs:'
-$joined = $rawOut -join "`n"
+# Decide how to provision infrastructure
 $deployOutputs = $null
-try {
-    $m = [regex]::Match($joined, 'Deployment outputs:\s*(\{.*\})', [System.Text.RegularExpressions.RegexOptions]::Singleline)
-    if ($m.Success) {
-        $jsonText = $m.Groups[1].Value
-        $deployOutputs = $jsonText | ConvertFrom-Json -ErrorAction Stop
-        Write-Host "Parsed deployment outputs from deploy.ps1"
+$rawOut = @()
+
+if ($UseAzureLocal.IsPresent) {
+    Write-Host "UseAzureLocal switch detected. Skipping Azure Bicep deploy and invoking AKS-HCI helper script."
+    if (-not $IsWindows) { Fail "-UseAzureLocal requires running on Windows so Windows PowerShell 5.x is available." }
+
+    $desktopPwsh = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    if (-not (Test-Path $desktopPwsh)) {
+        Fail "Windows PowerShell (powershell.exe) not found at expected path '$desktopPwsh'. Install Windows PowerShell 5.x or adjust the script to locate it."
     }
-    else {
-        Write-Host "No explicit 'Deployment outputs:' JSON block found in deploy.ps1 output. Falling back to discovery."
+
+    $manageScript = Join-Path $repoRoot 'infra\scripts\AzureLocal\Manage-AksHci-WorkloadCluster.ps1'
+    if (-not (Test-Path $manageScript)) { Fail "Azure Local helper script not found at $manageScript" }
+
+    Write-Host "Invoking Manage-AksHci-WorkloadCluster.ps1 via Windows PowerShell." 
+
+    $kubeConfigDirectory = $null
+    try { $kubeConfigDirectory = Split-Path -Parent $KubeConfigFilePath } catch { $kubeConfigDirectory = $null }
+    if ($kubeConfigDirectory -and -not (Test-Path $kubeConfigDirectory)) {
+        Write-Host "Creating directory for kubeconfig: $kubeConfigDirectory"
+        New-Item -ItemType Directory -Path $kubeConfigDirectory -Force | Out-Null
     }
+
+    $winCountInt = 0
+    try { $winCountInt = [int]$WindowsNodeCount } catch { $winCountInt = 0 }
+    $wantsWindowsNodes = $EnableWindows.IsPresent -or ($winCountInt -gt 0)
+    if (-not $EnableWindows.IsPresent -and $winCountInt -gt 0) {
+        Write-Host "WindowsNodeCount=$winCountInt provided without -EnableWindows; enabling Windows node provisioning."
+    }
+
+    $effectiveWindowsNodeCount = if ($wantsWindowsNodes) { [string]$winCountInt } else { '0' }
+
+    $manageArgs = @(
+        '-NoProfile',
+        '-ExecutionPolicy', 'Bypass',
+        '-File', $manageScript,
+        '-InstanceNumber', $InstanceNumber,
+        '-LinuxNodeCount', [string]$LinuxNodeCount,
+        '-WindowsNodeCount', $effectiveWindowsNodeCount,
+        '-KubeConfigPath', $KubeConfigFilePath,
+        '-WaitForProvisioning',
+        '-ProvisioningTimeoutMinutes', '40',
+        '-CollectDiagnosticsOnFailure',
+        '-AutoApprove'
+    )
+    if ($LinuxVmSize) { $manageArgs += '-LinuxNodeVmSize'; $manageArgs += $LinuxVmSize }
+    if ($WindowsVmSize) { $manageArgs += '-WindowsNodeVmSize'; $manageArgs += $WindowsVmSize }
+
+    Write-Host "powershell.exe arguments: $($manageArgs -join ' ')"
+
+    $rawOut = & $desktopPwsh @manageArgs 2>&1
+    $manageExit = $LASTEXITCODE
+    if ($manageExit -ne 0) {
+        $joinedManage = $rawOut -join "`n"
+        if ($joinedManage) { Write-Warning $joinedManage }
+        Fail "Manage-AksHci-WorkloadCluster.ps1 exited with code $manageExit"
+    }
+    Write-Host "Manage-AksHci-WorkloadCluster.ps1 completed successfully."
 }
-catch {
-    Write-Warning "Failed to parse deployment outputs JSON: $($_.Exception.Message)"; $deployOutputs = $null
+else {
+    # Deploy infra by invoking the bicep deploy helper
+    $deployScript = Join-Path $repoRoot 'infra\bicep\deploy.ps1'
+    if (-not (Test-Path $deployScript)) { Fail "Deploy script not found at $deployScript" }
+
+    Write-Host "Invoking infra deploy: $deployScript"
+
+    $deployArgs = @(
+        '-InstanceNumber', $InstanceNumber,
+        '-Location', $Location,
+        '-ResourceGroupName', $ResourceGroupName,
+        '-WindowsNodeCount', [string]$WindowsNodeCount,
+        '-LinuxNodeCount', [string]$LinuxNodeCount,
+        '-LinuxVmSize', $LinuxVmSize,
+        '-WindowsVmSize', $WindowsVmSize
+    )
+    if ($EnableWindows.IsPresent) { $deployArgs += '-EnableWindows'; $deployArgs += $true }
+    if ($ContainerRegistryName) { $deployArgs += '-ContainerRegistryName'; $deployArgs += $ContainerRegistryName }
+    if ($ContainerRegistryName) { $deployArgs += '-SkipContainerRegistry'; }
+
+    # Capture output (stdout + stderr) for parsing
+    Write-Host "Running deploy.ps1 with: $($deployArgs -join ' ')"
+    $rawOut = & pwsh -NoProfile -NonInteractive -File $deployScript @deployArgs 2>&1
+    if ($LASTEXITCODE -ne 0) { Write-Warning "deploy.ps1 exited with code $LASTEXITCODE; output may contain partial information." }
+
+    # Attempt to extract the JSON that the deploy script prints after 'Deployment outputs:'
+    $joined = $rawOut -join "`n"
+    try {
+        $m = [regex]::Match($joined, 'Deployment outputs:\s*(\{.*\})', [System.Text.RegularExpressions.RegexOptions]::Singleline)
+        if ($m.Success) {
+            $jsonText = $m.Groups[1].Value
+            $deployOutputs = $jsonText | ConvertFrom-Json -ErrorAction Stop
+            Write-Host "Parsed deployment outputs from deploy.ps1"
+        }
+        else {
+            Write-Host "No explicit 'Deployment outputs:' JSON block found in deploy.ps1 output. Falling back to discovery."
+        }
+    }
+    catch {
+        Write-Warning "Failed to parse deployment outputs JSON: $($_.Exception.Message)"; $deployOutputs = $null
+    }
 }
 
 # Determine ACR name
@@ -287,6 +399,10 @@ elseif ($deployOutputs -and $deployOutputs.containerRegistryName -and $deployOut
 }
 
 if (-not $acrName) {
+    if ($UseAzureLocal.IsPresent) {
+        Fail "When -UseAzureLocal is specified you must provide -ContainerRegistryName so the script knows which registry to use."
+    }
+
     Write-Host "Attempting to discover ACRs in resource group $ResourceGroupName"
     $acrListJson = az acr list -g $ResourceGroupName --query "[].name" -o tsv 2>$null
     if ($LASTEXITCODE -eq 0 -and $acrListJson) {
@@ -296,15 +412,21 @@ if (-not $acrName) {
     }
 }
 
-if (-not $acrName) { Fail "Unable to determine container registry name. Provide -ContainerRegistryName or ensure deploy produces an output 'containerRegistryName'." }
+if (-not $acrName) { Fail "Unable to determine container registry name. Provide -ContainerRegistryName or ensure the Azure deploy produces an output 'containerRegistryName'." }
 
 # Normalize ACR values
 if ($acrName -match '\.') { $acrFqdn = $acrName; $acrShort = $acrName.Split('.')[0] } else { $acrShort = $acrName; $acrFqdn = "$acrShort.azurecr.io" }
 Write-Host "ACR short: $acrShort  ACR FQDN: $acrFqdn"
 
 # AKS name and resource group
-$aksName = "aks-ado-agents-$InstanceNumber"
-Write-Host "Assumed AKS name: $aksName"
+if ($UseAzureLocal.IsPresent) {
+    $aksName = "workload-cluster-$InstanceNumber"
+    Write-Host "Using AKS-HCI workload cluster name: $aksName"
+}
+else {
+    $aksName = "aks-ado-agents-$InstanceNumber"
+    Write-Host "Assumed AKS name: $aksName"
+}
 
 # Fail-fast: If requested, ensure a Workload Identity Federation based Azure RM service connection exists BEFORE expensive image builds.
 if ($CreateWifServiceConnection) {
@@ -691,17 +813,17 @@ if ($CreateWifServiceConnection) {
         try {
             $origSubject = $FederatedSubject
             # Trim wrapping quotes (both single and double)
-            if ($FederatedSubject -match '^".*"$') { $FederatedSubject = $FederatedSubject.Substring(1, $FederatedSubject.Length-2) }
-            elseif ($FederatedSubject -match "^'.*'$") { $FederatedSubject = $FederatedSubject.Substring(1, $FederatedSubject.Length-2) }
+            if ($FederatedSubject -match '^".*"$') { $FederatedSubject = $FederatedSubject.Substring(1, $FederatedSubject.Length - 2) }
+            elseif ($FederatedSubject -match "^'.*'$") { $FederatedSubject = $FederatedSubject.Substring(1, $FederatedSubject.Length - 2) }
             # Normalize any Windows style backslashes inside to forward slashes (defensive)
-            $FederatedSubject = $FederatedSubject -replace '\\','/'
+            $FederatedSubject = $FederatedSubject -replace '\\', '/'
             # Remove any leading escaped sequences like \/ or multiple leading slashes
-            $FederatedSubject = $FederatedSubject -replace '^/+','/' -replace '^\\+/','/'
+            $FederatedSubject = $FederatedSubject -replace '^/+', '/' -replace '^\\+/', '/'
             if (-not $FederatedSubject.StartsWith('/')) { $FederatedSubject = '/' + $FederatedSubject }
             # Remove a single trailing backslash if present (after conversion it would be '/'), then any extra trailing slashes
-            $FederatedSubject = $FederatedSubject -replace '/+$',''
+            $FederatedSubject = $FederatedSubject -replace '/+$', ''
             # Collapse duplicate internal slashes
-            while ($FederatedSubject -match '//') { $FederatedSubject = ($FederatedSubject -replace '//','/') }
+            while ($FederatedSubject -match '//') { $FederatedSubject = ($FederatedSubject -replace '//', '/') }
             if ($origSubject -ne $FederatedSubject) { Write-Host "Normalized FederatedSubject from '$origSubject' to '$FederatedSubject'" }
             # Sanity check pattern (lightweight): should contain /sc/<guid>/<guid>
             if ($FederatedSubject -notmatch '/sc/[0-9a-fA-F-]{36}/[0-9a-fA-F-]{36}$') { Write-Warning "FederatedSubject '$FederatedSubject' does not match expected trailing /sc/<projectId>/<serviceConnectionId> pattern; verify the value." }
@@ -856,7 +978,7 @@ else {
     }
     else {
         # Switch Docker to Windows containers when building Windows images
-        Switch-DockerEngine -target 'windows' -timeoutSeconds 90
+        Switch-DockerEngine -target 'windows' -timeoutSeconds 90 -postSwitchDelaySeconds 15
         # Run the Windows build script in a separate pwsh process and pass parameters explicitly so PSBoundParameters in that script is populated correctly
         $cmd = "Set-StrictMode -Version Latest; Set-Location -LiteralPath '$winDir'; `$env:DEFAULT_ACR='$acrShort'; `$env:ACR_NAME='$acrShort'; & .\$winScriptName -ContainerRegistryName '$acrFqdn' -DefaultAcr '$acrShort'"
         Write-Host "Invoking windows build script in $winDir with explicit parameters"
@@ -957,7 +1079,9 @@ if (Test-Path $vgHelper) {
         }
     }
     catch {
-        Write-Warning ("Failed to invoke variable-group helper: { 0 }" -f $_.Exception.Message)
+        $msg = $_.Exception.Message
+        if ($msg) { $msg = $msg -replace '\{', '{{' -replace '\}', '}}' }
+        Write-Warning ("Failed to invoke variable-group helper: {0}" -f $msg)
     }
 }
 else {
