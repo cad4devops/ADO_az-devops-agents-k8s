@@ -2,6 +2,11 @@ FROM mcr.microsoft.com/windows/servercore:ltsc2019
 
 WORKDIR /azp/
 
+COPY ./Install-WindowsAgentTools.ps1 C:/temp/Install-WindowsAgentTools.ps1
+RUN powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File C:\temp\Install-WindowsAgentTools.ps1
+RUN del C:\temp\Install-WindowsAgentTools.ps1
+ENV PATH="C:\\Program Files\\dotnet;C:\\Program Files\\PowerShell\\7;C:\\Program Files (x86)\\Microsoft SDKs\\Azure\\CLI2\\wbin;C:\\Windows\\system32;C:\\Windows;C:\\Windows\\System32\\Wbem;C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\;C:\\Windows\\System32\\OpenSSH\\"
+
 COPY ./start.ps1 ./
 
 CMD powershell .\start.ps1
