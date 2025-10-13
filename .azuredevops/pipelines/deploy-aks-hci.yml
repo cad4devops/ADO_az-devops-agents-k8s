@@ -15,24 +15,26 @@ parameters:
     default: true
   - name: LinuxNodeCount
     type: number
-    default: 1
+    default: 2
   - name: WindowsNodeCount
     type: number
-    default: 1
+    default: 2
   - name: LinuxVmSize
     type: string
     default: "Standard_D4s_v3"
     values:
+      - "Standard_D2s_v3"
       - "Standard_D4s_v3"
       - "Standard_D8s_v3"
       - "Standard_D16s_v3"
   - name: WindowsVmSize
     type: string
-    default: "Standard_D2s_v3"
+    default: "Standard_D4s_v3"
     values:
       - "Standard_D2s_v3"
       - "Standard_D4s_v3"
       - "Standard_D8s_v3"
+      - "Standard_D16s_v3"
   - name: DeleteCluster
     type: boolean
     default: false
