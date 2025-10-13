@@ -25,6 +25,7 @@ param(
     [Parameter(Mandatory = $true)][string]$ADOCollectionName,
     [Parameter(Mandatory = $true)][string]$AzureDevOpsProject,
     [Parameter(Mandatory = $true)][string]$AzureDevOpsRepo,
+    [Parameter(Mandatory = $false)][string]$AzureDevOpsProjectWikiName = "$AzureDevOpsProject.wiki",
     [Parameter(Mandatory = $false)][string]$ResourceGroupName,
     [Parameter(Mandatory = $false)][string]$ContainerRegistryName, # = "devopsabcsrunners", # specify your container registry name or leave empty to create one
     [Parameter(Mandatory = $false)][switch]$BuildInPipeline,
@@ -1009,6 +1010,7 @@ foreach ($tpl in $pipelineTemplates) {
         '__UBUNTU_ONPREM_POOL_NAME__'          = $UbuntuOnPremPoolName
         '__WINDOWS_ONPREM_POOL_NAME__'         = $WindowsOnPremPoolName
         '__USE_ONPREM_AGENTS__'                = $UseOnPremAgents
+        '__AZURE_DEVOPS_PROJECT_WIKI_NAME__'   = $AzureDevOpsProjectWikiName
     }
     foreach ($k in $replacements.Keys) {
         $v = $replacements[$k]
