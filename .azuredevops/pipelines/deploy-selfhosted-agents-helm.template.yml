@@ -43,7 +43,7 @@ parameters:
   - name: bootstrapPoolName
     type: string
     default: "__BOOTSTRAP_POOL_NAME__"
-  # Removed hardcoded 003 from parameters, will calculate below
+  # Removed hardcoded __INSTANCE_NUMBER__ from parameters, will calculate below
   - name: windowsNodeTaintKey
     type: string
     default: "sku"
@@ -61,7 +61,10 @@ parameters:
     default: __USE_ONPREM_AGENTS__ # Set to true to use on-premises agents, false to use cloud agents
 
 variables:
-  - group: "__AZURE_DEVOPS_VARIABLE_GROUP__" # to get AZDO_PAT
+  - ${{ if eq(parameters.useAzureLocal, true) }}:
+      - group: "__AZURE_DEVOPS_VARIABLE_GROUP__-azurelocal" # to get AZDO_PAT
+  - ${{ if ne(parameters.useAzureLocal, true) }}:
+      - group: "__AZURE_DEVOPS_VARIABLE_GROUP__" # to get AZDO_PAT
   - name: instanceNumber
     value: ${{ parameters.instanceNumber }}
   - name: aksResourceGroup
@@ -70,10 +73,14 @@ variables:
     value: aks-ado-agents-${{ variables.instanceNumber }}
   - name: kubeconfigAzureLocal
     value: workload-cluster-${{ variables.instanceNumber }}-kubeconfig.yaml
+  - ${{ if eq(parameters.useAzureLocal, true) }}:
+      - name: kubeConfigSecretFile
+        value: AKS_workload-cluster-${{ variables.instanceNumber }}-kubeconfig_file_azurelocal
+  - ${{ if ne(parameters.useAzureLocal, true) }}:
+      - name: kubeConfigSecretFile
+        value: AKS_workload-cluster-${{ variables.instanceNumber }}-kubeconfig_file
   - name: kubeContextAzureLocal
     value: workload-cluster-${{ variables.instanceNumber }}-admin@workload-cluster-${{ variables.instanceNumber }}
-  - name: kubeConfigSecretFile
-    value: AKS_workload-cluster-${{ variables.instanceNumber }}-kubeconfig_file
   - name: azureSubscription
     value: ${{ parameters.AZURE_SERVICE_CONNECTION }}
 
@@ -202,12 +209,18 @@ stages:
                 Set-StrictMode -Version Latest
                 $ErrorActionPreference = 'Stop'
                 # If a secure file downloader ran earlier it will populate DownloadKubeconfig.secureFilePath
+                $requestedSecureFile = '${{ variables.kubeConfigSecretFile }}'
+                if(-not [string]::IsNullOrWhiteSpace($requestedSecureFile)){
+                  Write-Host "Expecting kubeconfig secure file named '$requestedSecureFile'"
+                }
                 $secureKubeConfig = '$(DownloadKubeconfig.secureFilePath)'
                 if(-not [string]::IsNullOrWhiteSpace($secureKubeConfig) -and (Test-Path $secureKubeConfig)){
+                  Write-Host "Secure file path resolved to $secureKubeConfig"
                   $kubeconfigPath = Join-Path $env:AGENT_TEMPDIRECTORY 'kubeconfig'
                   Copy-Item -Path $secureKubeConfig -Destination $kubeconfigPath -Force
                   Write-Host "Copied secure-file kubeconfig to $kubeconfigPath"
                   Write-Host "##vso[task.setvariable variable=KUBECONFIG]$kubeconfigPath"
+                  Write-Host "Active kubeconfig set to $kubeconfigPath"
                 } elseif(-not [string]::IsNullOrWhiteSpace($env:KUBECONFIG) -and (Test-Path $env:KUBECONFIG)){
                   Write-Host "KUBECONFIG already set to $env:KUBECONFIG (from previous az aks get-credentials step)"
                 } else {
@@ -513,7 +526,7 @@ stages:
                 Set-StrictMode -Version Latest
                 $ErrorActionPreference = 'Stop'
                 $instance = '${{ parameters.instanceNumber }}'
-                if([string]::IsNullOrWhiteSpace($instance)){ $instance = '003' }
+                if([string]::IsNullOrWhiteSpace($instance)){ $instance = '__INSTANCE_NUMBER__' }
                 $releaseName = "az-selfhosted-agents-$instance"
                 # determine namespace selection same as the repo script
                 $deployLinuxRaw = '${{ parameters.deployLinux }}'
@@ -542,7 +555,7 @@ stages:
                 $ErrorActionPreference = 'Stop'
                 Write-Host 'KEDA pods:'
                 try { kubectl get pods -n keda -o wide } catch { Write-Warning ("Failed to list KEDA pods: {0}" -f $_.Exception.Message) }
-                $inst = '${{ parameters.instanceNumber }}'; if([string]::IsNullOrWhiteSpace($inst)){ $inst='003' }
+                $inst = '${{ parameters.instanceNumber }}'; if([string]::IsNullOrWhiteSpace($inst)){ $inst='__INSTANCE_NUMBER__' }
                 $linuxNs = "az-devops-linux-$inst"
                 $winNs = "az-devops-windows-$inst"
                 Write-Host "Note: az-devops-$inst is deprecated; showing per-OS namespaces instead."
@@ -613,7 +626,7 @@ stages:
                 $ErrorActionPreference = 'Continue'
                 try {
                   $instance = '${{ parameters.instanceNumber }}'
-                  if([string]::IsNullOrWhiteSpace($instance)){ $instance = '003' }
+                  if([string]::IsNullOrWhiteSpace($instance)){ $instance = '__INSTANCE_NUMBER__' }
                   $useLocalParam = $false
                   try { $useLocalParam = [bool]('${{ parameters.useAzureLocal }}') } catch { $useLocalParam = $false }
                   if ($useLocalParam) { $linuxPool = "KubernetesPoolOnPremLinux$instance"; $windowsPool = "KubernetesPoolOnPremWindows$instance" } else { $linuxPool = "KubernetesPoolLinux$instance"; $windowsPool = "KubernetesPoolWindows$instance" }

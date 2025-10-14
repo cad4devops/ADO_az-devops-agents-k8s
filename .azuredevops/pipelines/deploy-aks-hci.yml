@@ -76,13 +76,21 @@ stages:
               # We launch Windows PowerShell (powershell.exe) explicitly so the script runs in PSv5
               script: |
                 Write-Host "Preparing to run Manage-AksHci-WorkloadCluster.ps1 for instance $(InstanceNumber)"
+                function Convert-ToBool {
+                    param([string]$Value)
+                    if ([string]::IsNullOrWhiteSpace($Value)) { return $false }
+                    try { return [System.Convert]::ToBoolean($Value) }
+                    catch { return $false }
+                }
+
                 $instance = '$(InstanceNumber)'
-                $auto = [bool]('$(AutoApprove)')
+                $auto = Convert-ToBool '$(AutoApprove)'
                 $linuxCount = [int]('$(LinuxNodeCount)')
                 $windowsCount = [int]('$(WindowsNodeCount)')
                 $linuxVmSize = '$(LinuxVmSize)'
                 $windowsVmSize = '$(WindowsVmSize)'
-                $delete = [bool]('$(DeleteCluster)')
+                $delete = Convert-ToBool '$(DeleteCluster)'
+                Write-Host "Resolved runtime flags: AutoApprove=$auto DeleteCluster=$delete"
                 if ($delete) { Write-Host "DeleteCluster=true -> will skip kubeconfig upload task via condition" }
 
                 # Write kubeconfig into the pipeline workspace so we can upload it to Azure DevOps secure files
@@ -98,13 +106,13 @@ stages:
                 if ($auto) { $args += '-AutoApprove' }
                 if ($delete) { $args += '-DeleteCluster' }
 
-                  Write-Host "Invoking Windows PowerShell with arguments: $($args -join ' ')"
-                  # Call desktop PowerShell directly so stdout/stderr streams to the pipeline in real time
-                  & 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' @args
-                  $exit = $LASTEXITCODE
-                  if ($exit -ne 0) {
-                      Write-Error "Manage-AksHci-WorkloadCluster.ps1 failed with exit code $exit"
-                      exit $exit
+                Write-Host "Invoking Windows PowerShell with arguments: $($args -join ' ')"
+                # Call desktop PowerShell directly so stdout/stderr streams to the pipeline in real time
+                & 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' @args
+                $exit = $LASTEXITCODE
+                if ($exit -ne 0) {
+                    Write-Error "Manage-AksHci-WorkloadCluster.ps1 failed with exit code $exit"
+                    exit $exit
                 }
 
           - task: PowerShell@2
@@ -127,16 +135,50 @@ stages:
                 $kubePath = Join-Path -Path '$(Pipeline.Workspace)' -ChildPath ("kubeconfigs/workload-cluster-{0}-kubeconfig.yaml" -f $instance)
                 if (-not (Test-Path $kubePath)) { Write-Error "Kubeconfig not found at $kubePath"; exit 2 }
 
-                $secureName = "workload-cluster-{0}-kubeconfig.yaml" -f $instance
+                $secureName = "AKS_workload-cluster-{0}-kubeconfig_file_azurelocal" -f $instance
                 Write-Host "Uploading $kubePath as secure file named $secureName"
 
                 $uploadScript = 'scripts/upload-secure-file-rest.ps1'
                 if (-not (Test-Path $uploadScript)) { Write-Error "Upload script not found: $uploadScript"; exit 3 }
 
-                & pwsh -NoProfile -Command {
-                    param($pat,$org,$proj,$name,$path)
-                    & .\scripts\upload-secure-file-rest.ps1 -PAT $pat -AzureDevOpsOrg $org -AzureDevOpsProjectID $proj -SecureNameFile2Upload $name -SecureNameFilePath2Upload $path
-                } -ArgumentList $env:SecureFilePAT, $env:AzureDevOpsOrg, $env:AzureDevOpsProjectID, $secureName, $kubePath
+                function Test-PlaceholderValue {
+                    param([string]$Value)
+                    if ([string]::IsNullOrWhiteSpace($Value)) { return $true }
+                    return $Value -match '^\$\(.+\)$'
+                }
+
+                $resolvedOrg = $env:AzureDevOpsOrg
+                if (Test-PlaceholderValue $resolvedOrg) {
+                    $collectionUri = '$(System.CollectionUri)'
+                    if ($collectionUri -match 'https://dev\.azure\.com/([^/]+)/?') {
+                        $resolvedOrg = $Matches[1]
+                        Write-Host "AzureDevOpsOrg not provided; using '$resolvedOrg' from System.CollectionUri."
+                    }
+                }
+
+                if (Test-PlaceholderValue $resolvedOrg) {
+                    Write-Error "AzureDevOpsOrg pipeline variable is not populated; set a real org name (e.g. 'myorg')."
+                    exit 4
+                }
+
+                $resolvedProject = $env:AzureDevOpsProjectID
+                if (Test-PlaceholderValue $resolvedProject) {
+                    $resolvedProject = '$(System.TeamProjectId)'
+                    if (-not (Test-PlaceholderValue $resolvedProject)) {
+                        Write-Host "AzureDevOpsProjectID not provided; using project id '$resolvedProject'."
+                    }
+                }
+
+                if (Test-PlaceholderValue $resolvedProject) {
+                    Write-Error "AzureDevOpsProjectID pipeline variable is not populated; set the project ID or name."
+                    exit 4
+                }
+
+                & pwsh -NoProfile -File $uploadScript -PAT $env:SecureFilePAT -AzureDevOpsOrg $resolvedOrg -AzureDevOpsProjectID $resolvedProject -SecureNameFile2Upload $secureName -SecureNameFilePath2Upload $kubePath
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Error "Upload script failed with exit code $LASTEXITCODE"
+                    exit $LASTEXITCODE
+                }
             env:
               # Use AZDO_PAT from the variable group ADO_az-devops-agents-k8s
               SecureFilePAT: $(AZDO_PAT)
