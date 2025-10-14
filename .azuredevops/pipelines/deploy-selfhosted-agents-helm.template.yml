@@ -62,7 +62,7 @@ parameters:
 
 variables:
   - ${{ if eq(parameters.useAzureLocal, true) }}:
-      - group: "__AZURE_DEVOPS_VARIABLE_GROUP__" # to get AZDO_PAT
+      - group: "__AZURE_DEVOPS_VARIABLE_GROUP_BASE__-azurelocal" # to get AZDO_PAT
   - ${{ if ne(parameters.useAzureLocal, true) }}:
       - group: "__AZURE_DEVOPS_VARIABLE_GROUP_BASE__" # to get AZDO_PAT
   - name: instanceNumber
