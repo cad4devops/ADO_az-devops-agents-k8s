@@ -84,7 +84,7 @@ parameters:
     displayName: Wiki update comment
 
 variables:
-  - group: ADO_az-devops-agents-k8s-003
+  - group: ADO_az-devops-agents-k8s-002-azurelocal
   - name: ACR_NAME
     value: ${{ parameters.ACR_NAME }}
   - name: LINUX_REPOSITORY_NAME

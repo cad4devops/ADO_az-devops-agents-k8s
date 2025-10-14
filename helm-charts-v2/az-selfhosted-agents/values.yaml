@@ -41,7 +41,7 @@ linux:
     container:
       name: linux-agent
       image: linux-sh-agent-docker:latest
-      pullPolicy: IfNotPresent
+      pullPolicy: Always
       resources:
         {}
         # We usually recommend not to specify default resources and to leave this as a conscious
@@ -64,7 +64,7 @@ windows:
     container:
       name: windows-agent
       image: windows-sh-agent-2022:latest
-      pullPolicy: IfNotPresent
+      pullPolicy: Always
       resources:
         {}
         # We usually recommend not to specify default resources and to leave this as a conscious

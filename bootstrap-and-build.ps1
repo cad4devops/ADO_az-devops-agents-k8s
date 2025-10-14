@@ -273,6 +273,22 @@ $repoRoot = Resolve-Path (Join-Path $scriptRoot '.')
 Write-Host "Script root: $scriptRoot"
 Write-Host "Repo root  : $repoRoot"
 
+$AzureDevOpsVariableGroupBase = $AzureDevOpsVariableGroup
+
+if ($UseAzureLocal.IsPresent) {
+    $azureLocalSuffix = '-azurelocal'
+
+    if (-not $AzureDevOpsVariableGroup.EndsWith($azureLocalSuffix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        Write-Host "UseAzureLocal set; AzureDevOpsVariableGroup suffixed with '$azureLocalSuffix'."
+        $AzureDevOpsVariableGroup = "$AzureDevOpsVariableGroup$azureLocalSuffix"
+    }
+
+    if (-not $KubeConfigSecretFile.EndsWith($azureLocalSuffix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        Write-Host "UseAzureLocal set; KubeConfigSecretFile suffixed with '$azureLocalSuffix'."
+        $KubeConfigSecretFile = "$KubeConfigSecretFile$azureLocalSuffix"
+    }
+}
+
 # Validate parameter combinations early
 if ($UseAzureLocal.IsPresent -and [string]::IsNullOrWhiteSpace($ContainerRegistryName)) {
     Fail "-UseAzureLocal requires that you also provide -ContainerRegistryName because the Azure Local helper does not create an ACR."
@@ -1003,6 +1019,7 @@ foreach ($tpl in $pipelineTemplates) {
         '__KUBECONTEXT_AZURE_LOCAL__'          = $KubeContextAzureLocal
         '__AZURE_SERVICE_CONNECTION__'         = $AzureDevOpsServiceConnectionName
         '__AZURE_DEVOPS_VARIABLE_GROUP__'      = $AzureDevOpsVariableGroup
+        '__AZURE_DEVOPS_VARIABLE_GROUP_BASE__' = $AzureDevOpsVariableGroupBase
         '__INSTALL_PIPELINE_NAME__'            = $InstallPipelineName
         '__RUN_ON_POOL_SAMPLE_PIPELINE_NAME__' = $RunOnPoolSamplePipelineName
         '__KUBECONFIG_SECRET_FILE__'           = $KubeConfigSecretFile

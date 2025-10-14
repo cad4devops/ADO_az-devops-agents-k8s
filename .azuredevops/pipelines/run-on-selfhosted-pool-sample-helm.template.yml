@@ -45,10 +45,97 @@ stages:
           - checkout: self
             persistCredentials: true
           - ${{ if eq(parameters.os, 'linux') }}:
+              - task: PowerShell@2
+                displayName: Verify PowerShell & az CLI (Linux)
+                inputs:
+                  targetType: inline
+                  pwsh: true
+                  script: |
+                    Set-StrictMode -Version Latest
+                    $ErrorActionPreference = 'Stop'
+                    Write-Host "PowerShell version: $($PSVersionTable.PSVersion.ToString())"
+                    if (-not (Get-Command az -ErrorAction SilentlyContinue)) {
+                        throw 'az CLI executable not found in PATH.'
+                    }
+                    $azInfoRaw = az version --output json --only-show-errors
+                    if (-not $azInfoRaw) {
+                        throw 'az version returned no output.'
+                    }
+                    $azInfo = $azInfoRaw | ConvertFrom-Json
+                    $coreVersion = $null
+                    if ($azInfo.PSObject.Properties.Name -contains 'core') {
+                        $coreVersion = $azInfo.core
+                    }
+                    elseif ($azInfo.PSObject.Properties.Name -contains 'azure-cli-core') {
+                        $coreVersion = $azInfo.'azure-cli-core'
+                    }
+
+                    if (-not $coreVersion) {
+                        throw "az CLI version payload missing 'core' or 'azure-cli-core' property. Raw payload: $azInfoRaw"
+                    }
+
+                    Write-Host "az CLI core version: $coreVersion"
+                    if ($azInfo.PSObject.Properties.Name -contains 'azure-cli-ml') {
+                        Write-Host "azure-cli-ml extension version: $($azInfo.'azure-cli-ml')"
+                    }
               - template: ../scripts/kubernetes/linux/hello-world.yml
                 parameters:
                   helloWaitSeconds: ${{ parameters.helloWaitSeconds }}
           - ${{ if eq(parameters.os, 'windows') }}:
+              - task: PowerShell@2
+                displayName: Verify PowerShell & az CLI (Windows)
+                inputs:
+                  targetType: inline
+                  pwsh: false
+                  script: |
+                    Set-StrictMode -Version Latest
+                    $ErrorActionPreference = 'Stop'
+
+                    Write-Host "PowerShell version: $($PSVersionTable.PSVersion.ToString())"
+
+                    $pwsh = Get-Command pwsh -ErrorAction SilentlyContinue
+                    if ($pwsh) {
+                        try {
+                            $pwshVersion = & $pwsh.Source -NoLogo -NoProfile -Command '$PSVersionTable.PSVersion.ToString()'
+                            Write-Host "pwsh version: $pwshVersion"
+                        }
+                        catch {
+                            Write-Warning "pwsh detected at $($pwsh.Source) but version check failed: $_"
+                        }
+                    }
+                    else {
+                        Write-Warning 'pwsh.exe not found in PATH. Skipping pwsh version check.'
+                    }
+
+                    $azCli = Get-Command az -ErrorAction SilentlyContinue
+                    if (-not $azCli) {
+                        Write-Warning 'az CLI executable not found in PATH. Skipping az version check.'
+                        return
+                    }
+
+                    $azInfoRaw = & $azCli.Source version --output json --only-show-errors
+                    if (-not $azInfoRaw) {
+                        throw 'az version returned no output.'
+                    }
+
+                    $azInfo = $azInfoRaw | ConvertFrom-Json
+                    $coreVersion = $null
+                    if ($azInfo.PSObject.Properties.Name -contains 'core') {
+                        $coreVersion = $azInfo.core
+                    }
+                    elseif ($azInfo.PSObject.Properties.Name -contains 'azure-cli-core') {
+                        $coreVersion = $azInfo.'azure-cli-core'
+                    }
+
+                    if (-not $coreVersion) {
+                        throw "az CLI version payload missing 'core' or 'azure-cli-core' property. Raw payload: $azInfoRaw"
+                    }
+
+                    Write-Host "az CLI core version: $coreVersion"
+
+                    if ($azInfo.PSObject.Properties.Name -contains 'azure-cli-ml') {
+                        Write-Host "azure-cli-ml extension version: $($azInfo.'azure-cli-ml')"
+                    }
               - template: ../scripts/kubernetes/windows/hello-world.yml
                 parameters:
                   helloWaitSeconds: ${{ parameters.helloWaitSeconds }}
