@@ -62,9 +62,9 @@ parameters:
 
 variables:
   - ${{ if eq(parameters.useAzureLocal, true) }}:
-      - group: "DevOpsAgentswithK8S-${{ parameters.instanceNumber }}-azurelocal" # to get AZDO_PAT
+      - group: "ADO_az-devops-agents-k8s-002-azurelocal" # to get AZDO_PAT
   - ${{ if ne(parameters.useAzureLocal, true) }}:
-      - group: "DevOpsAgentswithK8S-${{ parameters.instanceNumber }}" # to get AZDO_PAT
+      - group: "ADO_az-devops-agents-k8s-002" # to get AZDO_PAT
   - name: instanceNumber
     value: ${{ parameters.instanceNumber }}
   - name: aksResourceGroup
@@ -75,7 +75,7 @@ variables:
     value: workload-cluster-${{ variables.instanceNumber }}-kubeconfig.yaml
   - ${{ if eq(parameters.useAzureLocal, true) }}:
       - name: kubeConfigSecretFile
-        value: AKS_workload-cluster-${{ variables.instanceNumber }}-kubeconfig_file_azurelocal
+        value: AKS_workload-cluster-${{ variables.instanceNumber }}-kubeconfig_file-azurelocal
   - ${{ if ne(parameters.useAzureLocal, true) }}:
       - name: kubeConfigSecretFile
         value: AKS_workload-cluster-${{ variables.instanceNumber }}-kubeconfig_file
@@ -526,7 +526,7 @@ stages:
                 Set-StrictMode -Version Latest
                 $ErrorActionPreference = 'Stop'
                 $instance = '${{ parameters.instanceNumber }}'
-                if([string]::IsNullOrWhiteSpace($instance)){ $instance = '003' }
+                if([string]::IsNullOrWhiteSpace($instance)){ $instance = '002' }
                 $releaseName = "az-selfhosted-agents-$instance"
                 # determine namespace selection same as the repo script
                 $deployLinuxRaw = '${{ parameters.deployLinux }}'
@@ -555,7 +555,7 @@ stages:
                 $ErrorActionPreference = 'Stop'
                 Write-Host 'KEDA pods:'
                 try { kubectl get pods -n keda -o wide } catch { Write-Warning ("Failed to list KEDA pods: {0}" -f $_.Exception.Message) }
-                $inst = '${{ parameters.instanceNumber }}'; if([string]::IsNullOrWhiteSpace($inst)){ $inst='003' }
+                $inst = '${{ parameters.instanceNumber }}'; if([string]::IsNullOrWhiteSpace($inst)){ $inst='002' }
                 $linuxNs = "az-devops-linux-$inst"
                 $winNs = "az-devops-windows-$inst"
                 Write-Host "Note: az-devops-$inst is deprecated; showing per-OS namespaces instead."
@@ -626,7 +626,7 @@ stages:
                 $ErrorActionPreference = 'Continue'
                 try {
                   $instance = '${{ parameters.instanceNumber }}'
-                  if([string]::IsNullOrWhiteSpace($instance)){ $instance = '003' }
+                  if([string]::IsNullOrWhiteSpace($instance)){ $instance = '002' }
                   $useLocalParam = $false
                   try { $useLocalParam = [bool]('${{ parameters.useAzureLocal }}') } catch { $useLocalParam = $false }
                   if ($useLocalParam) { $linuxPool = "KubernetesPoolOnPremLinux$instance"; $windowsPool = "KubernetesPoolOnPremWindows$instance" } else { $linuxPool = "KubernetesPoolLinux$instance"; $windowsPool = "KubernetesPoolWindows$instance" }

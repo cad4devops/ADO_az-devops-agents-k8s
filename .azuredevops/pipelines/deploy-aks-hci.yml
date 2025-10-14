@@ -1,7 +1,6 @@
 ## Azure DevOps pipeline to create an AKS-HCI workload cluster using the repo script
-## This pipeline runs the script under Windows PowerShell (desktop) because the script
-## requires Windows PowerShell 5.x. Use a self-hosted Windows agent or microsoft-hosted
-## 'windows-latest' if that meets your environment requirements.
+## This template mirrors deploy-aks-hci.yml but uses token placeholders so bootstrap-and-build.ps1
+## can render environment-specific pipelines.
 
 trigger: none
 pr: none
@@ -40,7 +39,7 @@ parameters:
     default: false
 
 variables:
-  - group: "ADO_az-devops-agents-k8s-${{ parameters.InstanceNumber }}" # to get AZDO_PAT
+  - group: "ADO_az-devops-agents-k8s-002-azurelocal" # to get AZDO_PAT
   - name: InstanceNumber
     value: ${{ parameters.InstanceNumber }}
   - name: AutoApprove
@@ -58,7 +57,7 @@ variables:
 
 # Use a Windows agent so we can run Windows PowerShell 5.x
 pool:
-  name: "KubernetesPoolWindows"
+  name: "WindowsLatestPoolOnPrem"
 
 stages:
   - stage: deploy
@@ -135,7 +134,7 @@ stages:
                 $kubePath = Join-Path -Path '$(Pipeline.Workspace)' -ChildPath ("kubeconfigs/workload-cluster-{0}-kubeconfig.yaml" -f $instance)
                 if (-not (Test-Path $kubePath)) { Write-Error "Kubeconfig not found at $kubePath"; exit 2 }
 
-                $secureName = "AKS_workload-cluster-{0}-kubeconfig_file_azurelocal" -f $instance
+                $secureName = "AKS_workload-cluster-{0}-kubeconfig_file-azurelocal" -f $instance
                 Write-Host "Uploading $kubePath as secure file named $secureName"
 
                 $uploadScript = 'scripts/upload-secure-file-rest.ps1'

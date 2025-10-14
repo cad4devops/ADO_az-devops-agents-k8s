@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
-set -euo pipefail
+
+set -u
+# Some build hosts run bash in POSIX mode where pipefail is unavailable; fall back gracefully.
+if ! set -o pipefail >/dev/null 2>&1; then
+    echo "Warning: shell does not support 'pipefail'; continuing without it." >&2
+fi
+set -e
 
 export DEBIAN_FRONTEND=noninteractive
 

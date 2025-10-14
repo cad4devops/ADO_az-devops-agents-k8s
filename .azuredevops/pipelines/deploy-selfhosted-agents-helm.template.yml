@@ -62,9 +62,9 @@ parameters:
 
 variables:
   - ${{ if eq(parameters.useAzureLocal, true) }}:
-      - group: "__AZURE_DEVOPS_VARIABLE_GROUP__-azurelocal" # to get AZDO_PAT
-  - ${{ if ne(parameters.useAzureLocal, true) }}:
       - group: "__AZURE_DEVOPS_VARIABLE_GROUP__" # to get AZDO_PAT
+  - ${{ if ne(parameters.useAzureLocal, true) }}:
+      - group: "__AZURE_DEVOPS_VARIABLE_GROUP_BASE__" # to get AZDO_PAT
   - name: instanceNumber
     value: ${{ parameters.instanceNumber }}
   - name: aksResourceGroup
@@ -75,7 +75,7 @@ variables:
     value: workload-cluster-${{ variables.instanceNumber }}-kubeconfig.yaml
   - ${{ if eq(parameters.useAzureLocal, true) }}:
       - name: kubeConfigSecretFile
-        value: AKS_workload-cluster-${{ variables.instanceNumber }}-kubeconfig_file_azurelocal
+        value: AKS_workload-cluster-${{ variables.instanceNumber }}-kubeconfig_file-azurelocal
   - ${{ if ne(parameters.useAzureLocal, true) }}:
       - name: kubeConfigSecretFile
         value: AKS_workload-cluster-${{ variables.instanceNumber }}-kubeconfig_file

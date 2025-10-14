@@ -67,13 +67,13 @@ parameters:
     displayName: Kube context name to verify in Azure-local mode
   - name: kubeConfigSecretFile
     type: string
-    default: "AKS_workload-cluster-003-kubeconfig_file"
+    default: "AKS_workload-cluster-002-kubeconfig_file-azurelocal"
   - name: useOnPremAgents
     type: boolean
     default: false # Set to true to use on-premises agents, false to use cloud agents
 
 variables:
-  - group: "DevOpsAgentswithK8S-003" # to get AZDO_PAT
+  - group: "ADO_az-devops-agents-k8s-002-azurelocal" # to get AZDO_PAT
   - name: azureSubscription
     value: ${{ parameters.AZURE_SERVICE_CONNECTION }}
 
