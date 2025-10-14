@@ -61,7 +61,10 @@ parameters:
     default: false # Set to true to use on-premises agents, false to use cloud agents
 
 variables:
-  - group: "DevOpsAgentswithK8S-003" # to get AZDO_PAT
+  - ${{ if eq(parameters.useAzureLocal, true) }}:
+      - group: "DevOpsAgentswithK8S-${{ parameters.instanceNumber }}-azurelocal" # to get AZDO_PAT
+  - ${{ if ne(parameters.useAzureLocal, true) }}:
+      - group: "DevOpsAgentswithK8S-${{ parameters.instanceNumber }}" # to get AZDO_PAT
   - name: instanceNumber
     value: ${{ parameters.instanceNumber }}
   - name: aksResourceGroup
@@ -70,10 +73,14 @@ variables:
     value: aks-ado-agents-${{ variables.instanceNumber }}
   - name: kubeconfigAzureLocal
     value: workload-cluster-${{ variables.instanceNumber }}-kubeconfig.yaml
+  - ${{ if eq(parameters.useAzureLocal, true) }}:
+      - name: kubeConfigSecretFile
+        value: AKS_workload-cluster-${{ variables.instanceNumber }}-kubeconfig_file_azurelocal
+  - ${{ if ne(parameters.useAzureLocal, true) }}:
+      - name: kubeConfigSecretFile
+        value: AKS_workload-cluster-${{ variables.instanceNumber }}-kubeconfig_file
   - name: kubeContextAzureLocal
     value: workload-cluster-${{ variables.instanceNumber }}-admin@workload-cluster-${{ variables.instanceNumber }}
-  - name: kubeConfigSecretFile
-    value: AKS_workload-cluster-${{ variables.instanceNumber }}-kubeconfig_file
   - name: azureSubscription
     value: ${{ parameters.AZURE_SERVICE_CONNECTION }}
 
@@ -202,12 +209,18 @@ stages:
                 Set-StrictMode -Version Latest
                 $ErrorActionPreference = 'Stop'
                 # If a secure file downloader ran earlier it will populate DownloadKubeconfig.secureFilePath
+                $requestedSecureFile = '${{ variables.kubeConfigSecretFile }}'
+                if(-not [string]::IsNullOrWhiteSpace($requestedSecureFile)){
+                  Write-Host "Expecting kubeconfig secure file named '$requestedSecureFile'"
+                }
                 $secureKubeConfig = '$(DownloadKubeconfig.secureFilePath)'
                 if(-not [string]::IsNullOrWhiteSpace($secureKubeConfig) -and (Test-Path $secureKubeConfig)){
+                  Write-Host "Secure file path resolved to $secureKubeConfig"
                   $kubeconfigPath = Join-Path $env:AGENT_TEMPDIRECTORY 'kubeconfig'
                   Copy-Item -Path $secureKubeConfig -Destination $kubeconfigPath -Force
                   Write-Host "Copied secure-file kubeconfig to $kubeconfigPath"
                   Write-Host "##vso[task.setvariable variable=KUBECONFIG]$kubeconfigPath"
+                  Write-Host "Active kubeconfig set to $kubeconfigPath"
                 } elseif(-not [string]::IsNullOrWhiteSpace($env:KUBECONFIG) -and (Test-Path $env:KUBECONFIG)){
                   Write-Host "KUBECONFIG already set to $env:KUBECONFIG (from previous az aks get-credentials step)"
                 } else {

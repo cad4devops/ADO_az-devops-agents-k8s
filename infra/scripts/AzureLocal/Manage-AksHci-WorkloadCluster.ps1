@@ -84,6 +84,10 @@ if ([string]::IsNullOrWhiteSpace($KubeConfigPath)) {
     $KubeConfigPath = "$env:USERPROFILE\.kube\$ClusterName-kubeconfig.yaml"
 }
 
+$cluster = $null
+$windowsPoolSatisfied = $false
+$linuxPoolSatisfied = $false
+
 # Helper: determine the next pool instance number for an OS (returns a zero-padded 3-digit string)
 function Get-NextPoolInstanceNumber {
     param(
@@ -222,7 +226,36 @@ else {
 
 if ($existingClusters) {
     Write-Host "Existing clusters / VMs found:"
-    $existingClusters | ForEach-Object { Write-Host " - $_" }
+    foreach ($item in $existingClusters) {
+        if ($item -is [string]) {
+            Write-Host " - $item"
+        }
+        else {
+            $name = $null
+            if ($item.PSObject.Properties.Name -contains 'Name') { $name = $item.Name }
+            elseif ($item.PSObject.Properties.Name -contains 'ClusterName') { $name = $item.ClusterName }
+
+            $poolsText = ''
+            if ($item.PSObject.Properties.Name -contains 'NodePools') {
+                $poolProp = $item.NodePools
+                if ($poolProp) {
+                    if ($poolProp -is [string]) { $poolsText = ($poolProp -split ',') -join ', ' }
+                    elseif ($poolProp -is [System.Collections.IEnumerable]) {
+                        $poolsText = ($poolProp | ForEach-Object {
+                                if ($_ -is [string]) { $_ }
+                                elseif ($_.PSObject.Properties.Name -contains 'Name') { $_.Name }
+                                elseif ($_.PSObject.Properties.Name -contains 'NodePoolName') { $_.NodePoolName }
+                                else { $_.ToString() }
+                            }) -join ', '
+                    }
+                }
+            }
+
+            if ([string]::IsNullOrWhiteSpace($name)) { $name = $item.ToString() }
+            if ([string]::IsNullOrWhiteSpace($poolsText)) { $poolsText = 'n/a' }
+            Write-Host (" - {0} (NodePools: {1})" -f $name, $poolsText)
+        }
+    }
     # If the user asked to delete, confirm delete specifically and perform deletion now
     if ($DeleteCluster) {
         if (-not $AutoApprove) {
@@ -504,6 +537,33 @@ if ($existingClusters -and (Get-Command -Name Get-AksHciCluster -ErrorAction Sil
                 # Ensure Windows pool
                 Ensure-NodePool -desiredName $WindowsNodePoolName -desiredCount $WindowsNodeCount -desiredVmSize $WindowsNodeVmSize -osType 'Windows'
 
+                try {
+                    $verifyPools = Get-AksHciNodePool -clusterName $ClusterName -ErrorAction SilentlyContinue
+                }
+                catch {
+                    $verifyPools = $null
+                }
+
+                if ($verifyPools) {
+                    $linuxPoolSatisfied = $verifyPools | Where-Object {
+                        ($_ -is [string] -and $_ -eq $LinuxNodePoolName) -or
+                        ($_.PSObject.Properties.Name -contains 'Name' -and $_.Name -eq $LinuxNodePoolName) -or
+                        ($_.PSObject.Properties.Name -contains 'NodePoolName' -and $_.NodePoolName -eq $LinuxNodePoolName)
+                    }
+                    $linuxPoolSatisfied = [bool]$linuxPoolSatisfied
+
+                    $windowsPoolSatisfied = $verifyPools | Where-Object {
+                        ($_ -is [string] -and $_ -eq $WindowsNodePoolName) -or
+                        ($_.PSObject.Properties.Name -contains 'Name' -and $_.Name -eq $WindowsNodePoolName) -or
+                        ($_.PSObject.Properties.Name -contains 'NodePoolName' -and $_.NodePoolName -eq $WindowsNodePoolName)
+                    }
+                    $windowsPoolSatisfied = [bool]$windowsPoolSatisfied
+                }
+                else {
+                    $linuxPoolSatisfied = $existingPoolNames -contains $LinuxNodePoolName
+                    $windowsPoolSatisfied = $existingPoolNames -contains $WindowsNodePoolName
+                }
+
             }
             else {
                 Write-Warning "No node pool information available for $ClusterName."
@@ -536,6 +596,7 @@ if (-not $cluster) {
             -osType Linux `
             -osSku $LinuxOsSku `
             -kubernetesVersion $KubernetesVersion -ErrorAction Stop
+        $linuxPoolSatisfied = $true
     }
     catch {
         Write-Error ("Failed to create AKS workload cluster {0} (Linux node pool): {1}" -f $ClusterName, $_.Exception.Message)
@@ -548,9 +609,33 @@ else {
     Write-Host "Cluster $ClusterName already exists; skipping cluster creation step."
 }
 
-# Create Windows node pool using New-AksHciNodePool if available
-if (Get-Command -Name New-AksHciNodePool -ErrorAction SilentlyContinue) {
+# Ensure Linux pool exists for pre-created clusters
+if ($cluster -and -not $linuxPoolSatisfied -and (Get-Command -Name New-AksHciNodePool -ErrorAction SilentlyContinue)) {
     try {
+        Write-Host "Creating Linux node pool $LinuxNodePoolName (not detected in existing cluster state)."
+        New-AksHciNodePool -clusterName $ClusterName `
+            -name $LinuxNodePoolName `
+            -count $LinuxNodeCount `
+            -vmSize $LinuxNodeVmSize `
+            -osType Linux `
+            -osSku $LinuxOsSku -ErrorAction Stop
+        $linuxPoolSatisfied = $true
+    }
+    catch {
+        Write-Warning ("Failed to create Linux node pool: {0}" -f $_.Exception.Message)
+    }
+}
+elseif ($cluster -and $linuxPoolSatisfied) {
+    Write-Host "Linux node pool $LinuxNodePoolName already aligned with desired configuration; skipping creation."
+}
+elseif ($cluster) {
+    Write-Warning "Command 'New-AksHciNodePool' not available. Cannot create missing Linux node pool."
+}
+
+# Create Windows node pool using New-AksHciNodePool if available
+if (-not $windowsPoolSatisfied -and (Get-Command -Name New-AksHciNodePool -ErrorAction SilentlyContinue)) {
+    try {
+        Write-Host "Creating Windows node pool $WindowsNodePoolName (not detected in existing cluster state)."
         New-AksHciNodePool -clusterName $ClusterName `
             -name $WindowsNodePoolName `
             -count $WindowsNodeCount `
@@ -558,10 +643,14 @@ if (Get-Command -Name New-AksHciNodePool -ErrorAction SilentlyContinue) {
             -osType Windows `
             -osSku $WindowsOsSku `
             -taints 'sku=windows:NoSchedule' -ErrorAction Stop
+        $windowsPoolSatisfied = $true
     }
     catch {
         Write-Warning ("Failed to create Windows node pool: {0}" -f $_.Exception.Message)
     }
+}
+elseif ($windowsPoolSatisfied) {
+    Write-Host "Windows node pool $WindowsNodePoolName already aligned with desired configuration; skipping creation."
 }
 else {
     Write-Warning "Command 'New-AksHciNodePool' not available. Skipping Windows node pool creation."

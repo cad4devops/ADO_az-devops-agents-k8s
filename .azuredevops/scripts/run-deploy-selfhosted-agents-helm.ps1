@@ -85,12 +85,17 @@ if ($envKube) { $argList += '-Kubeconfig'; $argList += $envKube }
 # The pipeline sets USE_AZURE_LOCAL env var (true/false) and we should honor that instead
 # of inferring local mode from the mere presence of KUBECONFIG (which is also set when
 # az aks get-credentials runs in non-local mode).
+$helmTimeoutOverride = $env:HELM_TIMEOUT
 if ($env:USE_AZURE_LOCAL -and (ToBool $env:USE_AZURE_LOCAL)) {
     Write-Host "DEBUG: Wrapper detected USE_AZURE_LOCAL=true; forwarding -UseAzureLocal to child"
     $argList += '-UseAzureLocal'
     # If pipeline provided local kubeconfig and context values, forward them explicitly
     if ($envKubeAzureLocal) { $argList += '-KubeconfigAzureLocal'; $argList += $envKubeAzureLocal }
     if ($envKubeContextAzureLocal) { $argList += '-KubeContextAzureLocal'; $argList += $envKubeContextAzureLocal }
+    if (-not $helmTimeoutOverride) {
+        $helmTimeoutOverride = '10m'
+        Write-Host "DEBUG: Defaulting HelmTimeout to $helmTimeoutOverride for Azure Local runs"
+    }
 } else {
     Write-Host "DEBUG: Wrapper not forwarding -UseAzureLocal (USE_AZURE_LOCAL='${env:USE_AZURE_LOCAL}')"
 }
@@ -104,6 +109,7 @@ if ($envAzDo) { $argList += '-AzDevOpsToken'; $argList += $envAzDo }
 $argList += '-EnsureAzDoPools'
 if (ToBool $envDeployLinux) { $argList += '-DeployLinux' }
 if (ToBool $envDeployWindows) { $argList += '-DeployWindows' }
+if ($helmTimeoutOverride) { $argList += '-HelmTimeout'; $argList += $helmTimeoutOverride }
 
 Write-Host "Launching deploy script in child pwsh with args: $($argList -join ' ')"
 & pwsh -NoProfile -NoLogo -ExecutionPolicy Bypass -File $scriptPath @argList
