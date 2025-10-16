@@ -216,7 +216,7 @@ Infrastructure → Extract Outputs → Build Images → Render Templates → Upd
 **Trigger:**
 ```yaml
 schedules:
-- cron: '0 2 * * 0'  # Weekly on Sunday at 2 AM UTC
+- cron: '0 2 * * 1'  # Weekly on Monday at 2 AM UTC
 ```
 
 ---
