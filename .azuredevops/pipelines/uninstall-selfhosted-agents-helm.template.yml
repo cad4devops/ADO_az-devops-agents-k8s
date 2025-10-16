@@ -71,6 +71,12 @@ parameters:
   - name: useOnPremAgents
     type: boolean
     default: __USE_ONPREM_AGENTS__ # Set to true to use on-premises agents, false to use cloud agents
+  - name: windowsOnPremPoolName
+    type: string
+    default: "__WINDOWS_ONPREM_POOL_NAME__"
+  - name: ubuntuOnPremPoolName
+    type: string
+    default: "__UBUNTU_ONPREM_POOL_NAME__"
 
 variables:
   - group: "__AZURE_DEVOPS_VARIABLE_GROUP__" # to get AZDO_PAT
@@ -86,14 +92,14 @@ stages:
         pool:
           ${{ if eq(parameters.useAzureLocal, false) }}:
             ${{ if eq(parameters.useOnPremAgents, true) }}:
-              name: __UBUNTU_ONPREM_POOL_NAME__
+              name: ${{ parameters.ubuntuOnPremPoolName }}
             ${{ else }}:
               vmImage: ubuntu-latest
           ${{ else }}:
             ${{ if ne(parameters.bootstrapPoolName, '') }}:
               name: ${{ parameters.bootstrapPoolName }}
             ${{ else }}:
-              name: __WINDOWS_ONPREM_POOL_NAME__
+              name: ${{ parameters.windowsOnPremPoolName }}
         steps:
           - checkout: self
 
@@ -249,7 +255,7 @@ stages:
         condition: always()
         pool:
           ${{ if parameters.useOnPremAgents }}:
-            name: __UBUNTU_ONPREM_POOL_NAME__
+            name: ${{ parameters.ubuntuOnPremPoolName }}
           ${{ else }}:
             vmImage: ubuntu-latest
         steps:

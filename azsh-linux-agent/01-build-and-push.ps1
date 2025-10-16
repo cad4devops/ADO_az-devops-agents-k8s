@@ -78,13 +78,22 @@ if ($UsePrebaked -and -not $AgentVersion) {
 $FinalTag = if ($TagSuffix) { "$BaseTag-$TagSuffix" } else { $BaseTag }
 
 # Choose Dockerfile based on prebaked flag
+$dockerfileRepoName = $RepositoryName
+if ($RepositoryName -eq 'linux-sh-agent-dind') {
+    $dockerfileRepoName = 'linux-sh-agent-docker'
+    Write-Host "DinD repository '$RepositoryName' reuses Dockerfile.$dockerfileRepoName" -ForegroundColor Yellow
+}
+
 if ($UsePrebaked) {
-    $dockerFileName = "./Dockerfile.${RepositoryName}.prebaked"
+    $dockerFileName = "./Dockerfile.${dockerfileRepoName}.prebaked"
     Write-Host "Building PREBAKED Linux image: $RepositoryName with agent v${AgentVersion}" -ForegroundColor Cyan
 }
 else {
-    $dockerFileName = "./Dockerfile.${RepositoryName}"
+    $dockerFileName = "./Dockerfile.${dockerfileRepoName}"
     Write-Host "Building STANDARD Linux image: $RepositoryName" -ForegroundColor Cyan
+}
+if (-not (Test-Path $dockerFileName)) {
+    throw "Dockerfile '$dockerFileName' not found for repository '$RepositoryName'"
 }
 Write-Host " Registry : $ContainerRegistryName"
 Write-Host " BaseTag  : $BaseTag"

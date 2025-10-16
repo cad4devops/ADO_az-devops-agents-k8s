@@ -32,6 +32,7 @@ $envInstance = $env:INSTANCE_NUMBER
 $envDeployLinux = $env:DEPLOY_LINUX
 $envDeployWindows = $env:DEPLOY_WINDOWS
 $envAzOrg = $env:AZDO_ORG_URL
+$envLinuxImageVariant = $env:LINUX_IMAGE_VARIANT
 
 # Normalize and fallback defaults
 if (-not $envInstance) { $envInstance = '003' }
@@ -98,6 +99,19 @@ if ($env:USE_AZURE_LOCAL -and (ToBool $env:USE_AZURE_LOCAL)) {
     }
 } else {
     Write-Host "DEBUG: Wrapper not forwarding -UseAzureLocal (USE_AZURE_LOCAL='${env:USE_AZURE_LOCAL}')"
+}
+
+if ($envLinuxImageVariant) {
+    $normalizedVariant = $envLinuxImageVariant.Trim().ToLowerInvariant()
+    $allowedVariants = @('docker', 'dind', 'ubuntu22')
+    if ($allowedVariants -contains $normalizedVariant) {
+        Write-Host "DEBUG: Forwarding LinuxImageVariant='$normalizedVariant' to deploy helper"
+        $argList += '-LinuxImageVariant'
+        $argList += $normalizedVariant
+    }
+    else {
+        Write-Warning "LINUX_IMAGE_VARIANT value '$envLinuxImageVariant' is not recognized; skipping forward."
+    }
 }
 $argList += '-InstanceNumber'; $argList += $envInstance
 $argList += '-AcrName'; $argList += $envAcrName

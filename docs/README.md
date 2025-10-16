@@ -5,7 +5,7 @@ This folder contains user and operator documentation for deploying, validating, 
 - Top-level docs
 
 - `bootstrap-and-build.md` — Orchestrator (infra + prebaked image build + pipeline provisioning)
-- `deploy-selfhosted-agents.md` — Helm deployment & update flow
+- `deploy-selfhosted-agents.md` — Helm deployment & update flow (Linux now defaults to DinD variant `linux-sh-agent-dind`)
 - `validate-selfhosted-agents.md` — Post‑deploy validation
 - `run-on-selfhosted-pool-sample.md` — Minimal usage example
 - `uninstall-selfhosted-agents.md` — Removal & cleanup
@@ -28,6 +28,7 @@ Recent key updates (2025-10)
 | Area | Change | Impact |
 |------|--------|--------|
 | Images | Prebaked agents now default (Linux + Windows) | < 1 min cold start |
+| Linux Variant | DinD (`linux-sh-agent-dind`) is the default; weekly pipeline pins `LINUX_REPOSITORY_NAME` accordingly | In-pod Docker daemon, isolated build context |
 | Versioning | Dynamic agent version via GitHub releases | No manual bumps |
 | Download host | Switched to `download.agent.dev.azure.com` | Fixed legacy DNS failures |
 | Pipelines | Parallel per-version Windows builds | Faster refresh cadence |

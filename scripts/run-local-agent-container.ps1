@@ -40,7 +40,17 @@ param(
     [Parameter(Mandatory = $false)]
     [int]$HelloWaitSeconds = 180,
     [Parameter(Mandatory = $false)]
-    [switch]$RunPipelineTests
+    [switch]$RunPipelineTests,
+    [Parameter(Mandatory = $false, HelpMessage = 'Mount host docker socket (Linux only) at /var/run/docker.sock for in-container docker client access.')]
+    [switch]$MountDockerSocket,
+    [Parameter(Mandatory = $false, HelpMessage = 'After container start, attempt docker run hello-world inside it to validate non-root docker access (implies -MountDockerSocket if not in Kubernetes).')]
+    [switch]$TestDockerHelloWorld,
+    [Parameter(Mandatory = $false, HelpMessage = 'Full image reference (registry/repository:tag). Overrides ContainerRegistryName/RepositoryName/Tag when specified.')] 
+    [string]$Image,
+    [Parameter(Mandatory = $false, HelpMessage = 'Enable Docker-in-Docker (adds ENABLE_DIND=true env and privileged mode). Local only (non-Kubernetes).')] 
+    [switch]$EnableDinD,
+    [Parameter(Mandatory = $false, HelpMessage = 'Skip Azure DevOps agent configuration (SKIP_AGENT_CONFIG=true) for pure DinD/image validation.')] 
+    [switch]$SkipAgentConfig
 )
 
 Set-StrictMode -Version Latest
@@ -286,10 +296,22 @@ switch ($Platform) {
     'linux' {
         if (-not $RepositoryName) { $RepositoryName = 'linux-sh-agent-docker' }
         $defaultShell = '/bin/bash'
-        $dockerEntrypointArgs = @('--entrypoint', '/bin/sh')
-        $dockerCommandArgs = @('-c', ('trap ''exit 0'' TERM; sleep {0}' -f $KeepAliveSeconds))
-        $podCommand = @('/bin/sh')
-        $podArgs = @('-c', ('trap ''exit 0'' TERM; sleep {0}' -f $KeepAliveSeconds))
+
+        if ($EnableDinD) {
+            Write-Host 'EnableDinD requested; using image''s default entrypoint so dockerd bootstrap can run.'
+            $dockerEntrypointArgs = @()
+            $dockerCommandArgs = @()
+            $podCommand = $null
+            $podArgs = $null
+        }
+        else {
+            $dockerEntrypointArgs = @('--entrypoint', '/bin/sh')
+            $dockerCommandArgs = @('-c', ('trap ''exit 0'' TERM; sleep {0}' -f $KeepAliveSeconds))
+            $podCommand = @('/bin/sh')
+            $podArgs = @('-c', ('trap ''exit 0'' TERM; sleep {0}' -f $KeepAliveSeconds))
+        }
+
+        if ($TestDockerHelloWorld -and -not $MountDockerSocket -and -not $Kubernetes -and -not $EnableDinD) { $MountDockerSocket = $true }
         $nodeOsLabel = 'linux'
     }
     'windows' {
@@ -332,7 +354,13 @@ switch ($Platform) {
     default { throw "Unsupported platform '$Platform'" }
 }
 
-$image = '{0}/{1}:{2}' -f $ContainerRegistryName, $RepositoryName, $Tag
+if ($Image) {
+    Write-Host "Using explicit -Image '$Image' (overrides registry/repository/tag parameters)."
+    $image = $Image
+}
+else {
+    $image = '{0}/{1}:{2}' -f $ContainerRegistryName, $RepositoryName, $Tag
+}
 if (-not $ContainerName) {
     $rand = [Guid]::NewGuid().ToString('N').Substring(0, 6)
     $ContainerName = "agent-inspect-$($Platform.Substring(0,1))$rand"
@@ -375,6 +403,14 @@ if ($Kubernetes) {
         }
     }
 
+    $containerSpec = @{
+        name            = 'inspect'
+        image           = $image
+        imagePullPolicy = 'Always'
+    }
+    if ($podCommand -and $podCommand.Count -gt 0) { $containerSpec.command = $podCommand }
+    if ($podArgs -and $podArgs.Count -gt 0) { $containerSpec.args = $podArgs }
+
     $podSpec = @{
         apiVersion = 'v1'
         kind       = 'Pod'
@@ -382,13 +418,7 @@ if ($Kubernetes) {
         spec       = @{
             restartPolicy                 = 'Never'
             terminationGracePeriodSeconds = 5
-            containers                    = @(@{
-                    name            = 'inspect'
-                    image           = $image
-                    imagePullPolicy = 'Always'
-                    command         = $podCommand
-                    args            = $podArgs
-                })
+            containers                    = @($containerSpec)
         }
     }
 
@@ -503,7 +533,36 @@ if ($pullExit -ne 0) {
     throw "docker pull failed with exit code $pullExit. $loginHint"
 }
 
-$runArgs = @('run', '-d', '--name', $ContainerName) + $dockerEntrypointArgs + @($image) + $dockerCommandArgs
+$runArgs = @('run', '-d', '--name', $ContainerName)
+if ($EnableDinD -and -not $Kubernetes -and $Platform -eq 'linux') {
+    # DinD requires privileged and a writable /var/lib/docker. Use emptyDir via host tmpfs optional? Simpler: anonymous volume mount.
+    $runArgs += @('--privileged', '-v', "${ContainerName}-dind-data:/var/lib/docker", '-e', 'ENABLE_DIND=true')
+    if ($SkipAgentConfig) { $runArgs += @('-e', 'SKIP_AGENT_CONFIG=true') }
+}
+$runArgs += $dockerEntrypointArgs + @($image) + $dockerCommandArgs
+if (-not $Kubernetes -and $Platform -eq 'linux' -and $MountDockerSocket -and -not $EnableDinD) {
+    # Discover host docker.sock group id by using a tiny helper container (avoids platform/stat differences on host)
+    $socketGid = $null
+    $probeImages = @('alpine:3.20', 'busybox:latest')
+    foreach ($pi in $probeImages) {
+        & docker pull $pi 2>$null | Out-String | Out-Null
+        $gidAttempt = (& docker run --rm -v /var/run/docker.sock:/var/run/docker.sock $pi sh -c "stat -c %g /var/run/docker.sock" 2>$null)
+        if ($LASTEXITCODE -eq 0 -and $gidAttempt -match '^[0-9]+$') { $socketGid = $gidAttempt.Trim(); break }
+    }
+    if ($socketGid) {
+        Write-Host "Detected host docker.sock GID: $socketGid (will add supplementary group)"
+    }
+    else {
+        Write-Host "Warning: Could not determine docker.sock GID; proceeding without --group-add. Non-root docker may fail." -ForegroundColor Yellow
+    }
+
+    # Build run args with volume mount (and optional group-add)
+    $baseArgs = @('run', '-d', '--name', $ContainerName)
+    $volArgs = @('-v', '/var/run/docker.sock:/var/run/docker.sock')
+    $extraGroupArgs = @()
+    if ($socketGid) { $extraGroupArgs = @('--group-add', $socketGid) }
+    $runArgs = $baseArgs + $volArgs + $extraGroupArgs + $dockerEntrypointArgs + @($image) + $dockerCommandArgs
+}
 Write-Host "Starting container:`n  docker $($runArgs -join ' ')"
 & docker @runArgs
 if ($LASTEXITCODE -ne 0) {
@@ -528,6 +587,33 @@ if ($RunPipelineTests) {
     }
 
     Invoke-PipelineTests -Executor $executor -Platform $Platform -HelloWaitSeconds $HelloWaitSeconds
+}
+
+# Optional automated hello-world docker test (local linux path only)
+if (-not $Kubernetes -and $Platform -eq 'linux' -and $TestDockerHelloWorld) {
+    if ($EnableDinD) {
+        Write-Host 'Waiting for internal Docker daemon (DinD) to be ready...'
+        $max = 30; $count = 0; $ready = $false
+        while ($count -lt $max) {
+            & docker exec -i $ContainerName docker info >$null 2>&1
+            if ($LASTEXITCODE -eq 0) { $ready = $true; break }
+            Start-Sleep -Seconds 1
+            $count++
+        }
+        if (-not $ready) { Write-Host 'Warning: internal dockerd did not become ready within 30s.' -ForegroundColor Yellow }
+    }
+    Write-Host 'Running in-container docker hello-world validation...'
+    $execCmd = @('exec', '-i', $ContainerName, 'docker', 'run', '--rm', 'hello-world')
+    & docker @execCmd
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -eq 0) {
+        Write-Green 'SUCCESS: docker run hello-world completed inside container.'
+    }
+    else {
+        Write-Host "FAILED: docker run hello-world exited with code $exitCode" -ForegroundColor Red
+        Write-Host 'Attempting to capture docker info (may fail if client cannot reach daemon)...'
+        & docker exec -i $ContainerName docker info 2>&1 | Select-Object -First 80 | ForEach-Object { Write-Host $_ }
+    }
 }
 
 Write-Host ('Container will remain running for approximately {0} seconds; override with -KeepAliveSeconds.' -f $KeepAliveSeconds)

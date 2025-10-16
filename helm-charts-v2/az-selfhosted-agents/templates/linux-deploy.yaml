@@ -25,6 +25,11 @@ spec:
       - name: {{ .Values.linux.deploy.container.name }}
         image: {{ .Values.linux.deploy.container.image }}
         imagePullPolicy: {{ .Values.linux.deploy.container.pullPolicy }}
+        {{- if and .Values.linux.dind.enabled .Values.linux.dind.privileged }}
+        securityContext:
+          privileged: true
+          runAsUser: 0
+        {{- end }}
         resources:
             {{- toYaml .Values.linux.deploy.container.resources | nindent 12 }}
         env:
@@ -43,13 +48,45 @@ spec:
               secretKeyRef:
                 name: {{ .Values.secretlinux.name }}
                 key: AZP_POOL
+          {{- if .Values.linux.dind.enabled }}
+          - name: ENABLE_DIND
+            value: "true"
+          {{- if .Values.linux.dind.skipAgentConfig }}
+          - name: SKIP_AGENT_CONFIG
+            value: "true"
+          {{- end }}
+          {{- if .Values.linux.dind.daemonArgs }}
+          - name: DOCKER_DAEMON_ARGS
+            value: {{ .Values.linux.dind.daemonArgs | quote }}
+          {{- end }}
+          {{- end }}
         volumeMounts:
+        {{- if .Values.linux.dind.enabled }}
+        - name: dind-storage
+          mountPath: /var/lib/docker
+        {{- else }}
         - mountPath: /var/run/docker.sock
           name: docker-volume
+        {{- end }}
       imagePullSecrets:
         - name: regsecret
       volumes:
+      {{- if .Values.linux.dind.enabled }}
+      - name: dind-storage
+        {{- if eq .Values.linux.dind.storage.type "emptyDir" }}
+        emptyDir: {}
+        {{- else if eq .Values.linux.dind.storage.type "hostPath" }}
+        hostPath:
+          path: {{ .Values.linux.dind.storage.hostPath }}
+        {{- else if eq .Values.linux.dind.storage.type "pvc" }}
+        persistentVolumeClaim:
+          claimName: {{ .Values.linux.dind.storage.pvcName }}
+        {{- else }}
+        emptyDir: {}
+        {{- end }}
+      {{- else }}
       - name: docker-volume
         hostPath:
           path: /var/run/docker.sock
+      {{- end }}
 {{ end }}

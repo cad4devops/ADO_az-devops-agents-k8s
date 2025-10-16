@@ -82,13 +82,19 @@ parameters:
     type: string
     default: "Automated agent tooling report update"
     displayName: Wiki update comment
+  - name: windowsOnPremPoolName
+    type: string
+    default: "__WINDOWS_ONPREM_POOL_NAME__"
+  - name: ubuntuOnPremPoolName
+    type: string
+    default: "__UBUNTU_ONPREM_POOL_NAME__"
 
 variables:
   - group: __AZURE_DEVOPS_VARIABLE_GROUP__
   - name: ACR_NAME
     value: ${{ parameters.ACR_NAME }}
   - name: LINUX_REPOSITORY_NAME
-    value: linux-sh-agent-docker
+    value: linux-sh-agent-dind
   - name: WINDOWS_VERSIONS
     value: 2022,2025
   - name: AZURE_SERVICE_CONNECTION
@@ -102,7 +108,7 @@ stages:
         displayName: Resolve semantic version / tag suffix
         pool:
           ${{ if parameters.useOnPremAgents }}:
-            name: __UBUNTU_ONPREM_POOL_NAME__
+            name: ${{ parameters.ubuntuOnPremPoolName }}
           ${{ else }}:
             vmImage: ubuntu-latest
         steps:
@@ -227,7 +233,7 @@ stages:
         dependsOn: [Versioning]
         pool:
           ${{ if parameters.useOnPremAgents }}:
-            name: __UBUNTU_ONPREM_POOL_NAME__
+            name: ${{ parameters.ubuntuOnPremPoolName }}
           ${{ else }}:
             vmImage: ubuntu-latest
         steps:
@@ -313,7 +319,7 @@ stages:
         condition: and(succeeded(), eq(dependencies.Preflight.outputs['PreflightVars.ACR_READY'],'true'), eq(${{ parameters.skipLinux }}, false), eq(${{ parameters.skipBuildStage }}, false))
         pool:
           ${{ if parameters.useOnPremAgents }}:
-            name: __UBUNTU_ONPREM_POOL_NAME__
+            name: ${{ parameters.ubuntuOnPremPoolName }}
           ${{ else }}:
             vmImage: ubuntu-latest
         variables:
@@ -385,7 +391,7 @@ stages:
         condition: and(succeeded(), eq(dependencies.Preflight.outputs['PreflightVars.ACR_READY'],'true'), eq(${{ parameters.skipWindows }}, false), eq(${{ parameters.skipBuildStage }}, false))
         pool:
           ${{ if parameters.useOnPremAgents }}:
-            name: __WINDOWS_ONPREM_POOL_NAME__
+            name: ${{ parameters.windowsOnPremPoolName }}
           ${{ else }}:
             vmImage: windows-latest
         variables:
@@ -464,7 +470,7 @@ stages:
         condition: and(succeeded(), eq(dependencies.Preflight.outputs['PreflightVars.ACR_READY'],'true'), eq(${{ parameters.skipWindows }}, false), eq(${{ parameters.skipBuildStage }}, false))
         pool:
           ${{ if parameters.useOnPremAgents }}:
-            name: __WINDOWS_ONPREM_POOL_NAME__
+            name: ${{ parameters.windowsOnPremPoolName }}
           ${{ else }}:
             vmImage: windows-latest
         variables:
@@ -549,7 +555,7 @@ stages:
         condition: and(succeededOrFailed(), eq(${{ parameters.skipBuildStage }}, false))
         pool:
           ${{ if parameters.useOnPremAgents }}:
-            name: __UBUNTU_ONPREM_POOL_NAME__
+            name: ${{ parameters.ubuntuOnPremPoolName }}
           ${{ else }}:
             vmImage: ubuntu-latest
         variables:
@@ -724,7 +730,7 @@ stages:
         condition: and(succeeded(), eq(${{ parameters.skipLinux }}, false))
         pool:
           ${{ if parameters.useOnPremAgents }}:
-            name: __UBUNTU_ONPREM_POOL_NAME__
+            name: ${{ parameters.ubuntuOnPremPoolName }}
           ${{ else }}:
             vmImage: ubuntu-latest
         variables:
@@ -886,7 +892,7 @@ stages:
         condition: and(succeeded(), eq(${{ parameters.skipWindows }}, false))
         pool:
           ${{ if parameters.useOnPremAgents }}:
-            name: __WINDOWS_ONPREM_POOL_NAME__
+            name: ${{ parameters.windowsOnPremPoolName }}
           ${{ else }}:
             vmImage: windows-latest
         variables:
@@ -1082,7 +1088,7 @@ stages:
         condition: and(succeeded(), eq(${{ parameters.skipWindows }}, false))
         pool:
           ${{ if parameters.useOnPremAgents }}:
-            name: __WINDOWS_ONPREM_POOL_NAME__
+            name: ${{ parameters.windowsOnPremPoolName }}
           ${{ else }}:
             vmImage: windows-latest
         variables:
@@ -1282,7 +1288,7 @@ stages:
         condition: and(succeeded(), or(eq(${{ parameters.skipLinux }}, false), eq(${{ parameters.skipWindows }}, false)))
         pool:
           ${{ if parameters.useOnPremAgents }}:
-            name: __UBUNTU_ONPREM_POOL_NAME__
+            name: ${{ parameters.ubuntuOnPremPoolName }}
           ${{ else }}:
             vmImage: ubuntu-latest
         variables:

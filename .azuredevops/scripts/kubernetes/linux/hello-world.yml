@@ -4,12 +4,7 @@ parameters:
     default: 120
 
 steps:
-  - bash: |
-      echo "Hello, Welcome to DevOps ABCs World!"
-      # sleep for a configurable time
-      echo "Sleeping for ${{ parameters.helloWaitSeconds }} seconds..."
-      sleep ${{ parameters.helloWaitSeconds }}
-    displayName: "Hello World (sleep=${{ parameters.helloWaitSeconds }}s)"
+  # Run docker smoke test first so we fail fast if the agent's Docker (DinD) setup is broken
   - task: CmdLine@2
     displayName: test docker
     inputs:
@@ -17,3 +12,11 @@ steps:
         echo Write your commands here
         echo Hello world
         docker -v
+        echo Running docker hello-world smoke test
+        docker run --rm hello-world
+  # Then perform the wait/sleep demonstration
+  - bash: |
+      echo "Hello, Welcome to DevOps ABCs World!"
+      echo "Sleeping for ${{ parameters.helloWaitSeconds }} seconds..."
+      sleep ${{ parameters.helloWaitSeconds }}
+    displayName: "Hello World (sleep=${{ parameters.helloWaitSeconds }}s)"

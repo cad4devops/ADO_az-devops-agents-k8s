@@ -37,6 +37,9 @@ parameters:
   - name: DeleteCluster
     type: boolean
     default: false
+  - name: windowsOnPremPoolName
+    type: string
+    default: "WindowsLatestPoolOnPrem"
 
 variables:
   - group: "ADO_az-devops-agents-k8s-002-azurelocal" # to get AZDO_PAT
@@ -57,7 +60,7 @@ variables:
 
 # Use a Windows agent so we can run Windows PowerShell 5.x
 pool:
-  name: "WindowsLatestPoolOnPrem"
+  name: "${{ parameters.windowsOnPremPoolName }}"
 
 stages:
   - stage: deploy

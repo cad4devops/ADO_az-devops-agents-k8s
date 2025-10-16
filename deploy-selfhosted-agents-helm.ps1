@@ -66,6 +66,11 @@ function Write-Green([string]$msg) {
     catch { Write-Host $msg }
 }
 
+# Switch defaults for DeployLinux/DeployWindows are true but .IsPresent stays false unless caller provided the flag.
+# Track explicit enabled state via booleans so downstream logic does not misinterpret the defaults.
+$deployLinuxEnabled = [bool]$DeployLinux
+$deployWindowsEnabled = [bool]$DeployWindows
+
 # If running in Azure-local/on-prem mode, require the caller to supply local kubeconfig and context
 # and an explicit bootstrap pool name so downstream operations have the information they need.
 if ($UseAzureLocal.IsPresent) {
@@ -476,12 +481,18 @@ helm upgrade --install keda kedacore/keda --namespace keda --create-namespace --
 Write-Host 'KEDA install ensured.'
 
 # build values override
-$enabledLinux = $DeployLinux.IsPresent ? 'true' : 'false'
-$enabledWindows = $DeployWindows.IsPresent ? 'true' : 'false'
+$enabledLinux = $deployLinuxEnabled ? 'true' : 'false'
+$enabledWindows = $deployWindowsEnabled ? 'true' : 'false'
 switch ($LinuxImageVariant) {
     'ubuntu22' { $linuxRepo = "$AcrName.azurecr.io/linux-sh-agent-ubuntu22" }
     'dind' { $linuxRepo = "$AcrName.azurecr.io/linux-sh-agent-dind" }
     default { $linuxRepo = "$AcrName.azurecr.io/linux-sh-agent-docker" }
+}
+
+# Advisory: if user selected non-dind variant but intends to run docker build commands without host socket, emit guidance.
+if ($DeployLinux -and $LinuxImageVariant -ne 'dind') {
+    Write-Host "INFO: LinuxImageVariant is '$LinuxImageVariant'. Host docker socket will be mounted (not DinD)." -ForegroundColor Cyan
+    Write-Host "      To use internal Docker daemon (DinD) set -LinuxImageVariant dind (enables privileged container & /var/lib/docker volume)." -ForegroundColor Cyan
 }
 $winRepo = "$AcrName.azurecr.io/windows-sh-agent-$WindowsVersion"
 
@@ -510,6 +521,17 @@ else {
 
 $yamlLines += 'linux:'
 $yamlLines += ('  enabled: ' + $enabledLinux)
+if ($LinuxImageVariant -eq 'dind') {
+    $yamlLines += '  dind:'
+    $yamlLines += '    enabled: true'
+    $yamlLines += '    privileged: true'
+    $yamlLines += '    skipAgentConfig: false'
+    $yamlLines += '    daemonArgs: ""'
+    $yamlLines += '    storage:'
+    $yamlLines += '      type: emptyDir'
+    $yamlLines += '      hostPath: /var/lib/docker'
+    $yamlLines += '      pvcName: ""'
+}
 $yamlLines += '  deploy:'
 $yamlLines += '    container:'
 $yamlLines += ('      image: ' + ($linuxRepo + ':latest'))
@@ -641,7 +663,7 @@ if ($patForPools -and $orgUrl) {
         $headers = @{ Authorization = $authHeader }
         
         # Query pools by name; use the distributedtask/pools endpoint
-        if ($poolLinux -and $DeployLinux.IsPresent) {
+        if ($poolLinux -and $deployLinuxEnabled) {
             try {
                 $q = "$orgUrl/_apis/distributedtask/pools?poolName=$([Uri]::EscapeDataString($poolLinux))&api-version=7.1-preview.1"
                 $resp = Invoke-RestMethod -Method Get -Uri $q -Headers $headers -ErrorAction Stop
@@ -658,7 +680,7 @@ if ($patForPools -and $orgUrl) {
             }
         }
         
-        if ($poolWindows -and $DeployWindows.IsPresent) {
+        if ($poolWindows -and $deployWindowsEnabled) {
             try {
                 $q = "$orgUrl/_apis/distributedtask/pools?poolName=$([Uri]::EscapeDataString($poolWindows))&api-version=7.1-preview.1"
                 $resp = Invoke-RestMethod -Method Get -Uri $q -Headers $headers -ErrorAction Stop
@@ -812,7 +834,7 @@ $linuxNs = "az-devops-linux-$InstanceNumber"
 $winNs = "az-devops-windows-$InstanceNumber"
 $namespaces = @($linuxNs, $winNs)
 # Choose release namespace: prefer Linux if Linux is being deployed, otherwise Windows
-$releaseNamespace = if ($DeployLinux.IsPresent) { $linuxNs } elseif ($DeployWindows.IsPresent) { $winNs } else { $linuxNs }
+$releaseNamespace = if ($deployLinuxEnabled) { $linuxNs } elseif ($deployWindowsEnabled) { $winNs } else { $linuxNs }
 foreach ($ns in $namespaces) {
     try { kubectl create namespace $ns --dry-run=client -o yaml | kubectl apply -f - } catch { Write-Warning ("Failed to ensure namespace {0}: {1}" -f $ns, $_.Exception.Message) }
 }
@@ -969,6 +991,30 @@ poolID:\s*\n[\s\S]*?windows:\s*(?:"|')?([^"'\r\n]+)(?:"|')?
 else {
     Write-Warning "Skipping poolID extraction because helm get values returned no data for ${releaseName} in ${releaseNamespace}."
 }
+
+# DinD post-deploy validation: ensure privileged root securityContext present when dind image variant used
+try {
+    $expectDinD = ($LinuxImageVariant -eq 'dind' -and $deployLinuxEnabled)
+    if ($expectDinD) {
+        $linuxNs = "az-devops-linux-$InstanceNumber"
+        $deployName = 'azsh-linux-agent'
+        Write-Host "Validating DinD deployment securityContext for $deployName in namespace $linuxNs (expected privileged root)"
+        $deployJson = kubectl get deploy $deployName -n $linuxNs -o json 2>$null | Out-String
+        if (-not $deployJson) { Write-Warning "Could not retrieve deployment $deployName in $linuxNs to validate DinD securityContext." }
+        else {
+            $obj = $deployJson | ConvertFrom-Json -ErrorAction SilentlyContinue
+            $sc = $obj.spec.template.spec.containers[0].securityContext
+            $priv = $false; $runAsUser = $null
+            if ($sc) { $priv = [bool]$sc.privileged; $runAsUser = $sc.runAsUser }
+            if (-not $priv -or $runAsUser -ne 0) {
+                Write-Error "DinD validation failed: expected privileged=true and runAsUser=0 but observed privileged=$priv runAsUser=$runAsUser"
+                Fail "DinD securityContext missing or incorrect. Investigate Helm values rendering before proceeding."
+            }
+            else { Write-Host "DinD securityContext validation passed (privileged=$priv runAsUser=$runAsUser)." }
+        }
+    }
+}
+catch { Write-Warning ("DinD post-deploy validation encountered an error: {0}" -f $_.Exception.Message) }
 
 # Post-deploy: list pods and deployments in release namespace (guard against empty namespace)
 Write-Host "Post-deploy: list pods and deployments in release namespace $releaseNamespace"

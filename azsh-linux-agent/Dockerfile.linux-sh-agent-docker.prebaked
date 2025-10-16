@@ -2,6 +2,9 @@ FROM ubuntu:24.04
 
 # Agent version as build argument (fetched dynamically by build script)
 ARG AGENT_VERSION=4.261.0
+ARG AGENT_USER=azpagent # retained for backward compatibility (not created when running as root)
+ARG AGENT_UID=1000
+ARG AGENT_GID=1000
 
 # Docker install
 RUN apt-get update && apt-get install --no-install-recommends -y \
@@ -28,21 +31,27 @@ COPY ./install-linux-agent-tools.sh /tmp/install-linux-agent-tools.sh
 RUN bash /tmp/install-linux-agent-tools.sh
 RUN rm /tmp/install-linux-agent-tools.sh
 
+### Running as root (DinD scenario) ###
+RUN set -eux; mkdir -p /azp; echo "Running as root; skipping dedicated agent user creation (AGENT_ALLOW_RUNASROOT enabled)."
+
 WORKDIR /azp/
 
 # Pre-download the Azure Pipelines agent during build
 # This eliminates runtime download and improves pod startup time
-RUN echo "Downloading Azure Pipelines agent v${AGENT_VERSION}..." && \
+RUN echo "Downloading Azure Pipelines agent v${AGENT_VERSION} as root..." && \
     DOWNLOAD_URL="https://download.agent.dev.azure.com/agent/${AGENT_VERSION}/vsts-agent-linux-x64-${AGENT_VERSION}.tar.gz" && \
     echo "Download URL: ${DOWNLOAD_URL}" && \
     mkdir -p /azp/agent && \
     curl -LsS "${DOWNLOAD_URL}" | tar -xz -C /azp/agent && \
+    chown -R root:root /azp && \
     echo "Agent v${AGENT_VERSION} ready."
 
 COPY ./start-prebaked.sh ./start.sh
 RUN chmod +x ./start.sh
 
 ENV AGENT_ALLOW_RUNASROOT="true"
+
+# Intentionally remain as root for DinD support
 
 # Set start.sh script as ENTRYPOINT.
 ENTRYPOINT ["/azp/start.sh"]

@@ -14,7 +14,7 @@ parameters:
     default: "2022"
   - name: linuxImageVariant
     type: string
-    default: "docker"
+    default: "dind"
   - name: AZURE_SERVICE_CONNECTION
     type: string
     default: "__AZURE_SERVICE_CONNECTION__"
@@ -43,6 +43,12 @@ parameters:
   - name: bootstrapPoolName
     type: string
     default: "__BOOTSTRAP_POOL_NAME__"
+  - name: windowsOnPremPoolName
+    type: string
+    default: "__WINDOWS_ONPREM_POOL_NAME__"
+  - name: ubuntuOnPremPoolName
+    type: string
+    default: "__UBUNTU_ONPREM_POOL_NAME__"
   # Removed hardcoded __INSTANCE_NUMBER__ from parameters, will calculate below
   - name: windowsNodeTaintKey
     type: string
@@ -95,9 +101,9 @@ stages:
             ${{ if ne(parameters.bootstrapPoolName, '') }}:
               name: ${{ parameters.bootstrapPoolName }}
             ${{ else }}:
-              name: __WINDOWS_ONPREM_POOL_NAME__
+              name: ${{ parameters.windowsOnPremPoolName }}
           ${{ if and(eq(parameters.useAzureLocal, false), eq(parameters.useOnPremAgents, true)) }}:
-            name: __UBUNTU_ONPREM_POOL_NAME__
+            name: ${{ parameters.ubuntuOnPremPoolName }}
           ${{ if and(eq(parameters.useAzureLocal, false), ne(parameters.useOnPremAgents, true)) }}:
             vmImage: ubuntu-latest
         steps:
@@ -489,6 +495,7 @@ stages:
               ACR_PASSWORD: $(ACR_PASSWORD)
               INSTANCE_NUMBER: "${{ parameters.instanceNumber }}"
               DEPLOY_LINUX: $(DEPLOY_LINUX)
+              LINUX_IMAGE_VARIANT: "${{ parameters.linuxImageVariant }}"
               DEPLOY_WINDOWS: "${{ parameters.deployWindows }}"
               AZDO_ORG_URL: "${{ parameters.azureDevOpsOrgUrl }}"
               USE_AZURE_LOCAL: "${{ parameters.useAzureLocal }}"
@@ -526,7 +533,7 @@ stages:
                 Set-StrictMode -Version Latest
                 $ErrorActionPreference = 'Stop'
                 $instance = '${{ parameters.instanceNumber }}'
-                if([string]::IsNullOrWhiteSpace($instance)){ $instance = '__INSTANCE_NUMBER__' }
+                if([string]::IsNullOrWhiteSpace($instance)){ $instance = '${{ parameters.instanceNumber }}' }
                 $releaseName = "az-selfhosted-agents-$instance"
                 # determine namespace selection same as the repo script
                 $deployLinuxRaw = '${{ parameters.deployLinux }}'
@@ -555,7 +562,7 @@ stages:
                 $ErrorActionPreference = 'Stop'
                 Write-Host 'KEDA pods:'
                 try { kubectl get pods -n keda -o wide } catch { Write-Warning ("Failed to list KEDA pods: {0}" -f $_.Exception.Message) }
-                $inst = '${{ parameters.instanceNumber }}'; if([string]::IsNullOrWhiteSpace($inst)){ $inst='__INSTANCE_NUMBER__' }
+                $inst = '${{ parameters.instanceNumber }}'; if([string]::IsNullOrWhiteSpace($inst)){ $inst='${{ parameters.instanceNumber }}' }
                 $linuxNs = "az-devops-linux-$inst"
                 $winNs = "az-devops-windows-$inst"
                 Write-Host "Note: az-devops-$inst is deprecated; showing per-OS namespaces instead."
@@ -580,7 +587,7 @@ stages:
         condition: succeededOrFailed()
         pool:
           ${{ if or(eq(parameters.useAzureLocal, true), eq(parameters.useOnPremAgents, true)) }}:
-            name: __UBUNTU_ONPREM_POOL_NAME__
+            name: ${{ parameters.ubuntuOnPremPoolName }}
           ${{ if and(ne(parameters.useAzureLocal, true), ne(parameters.useOnPremAgents, true)) }}:
             vmImage: ubuntu-latest
         steps:
@@ -626,7 +633,7 @@ stages:
                 $ErrorActionPreference = 'Continue'
                 try {
                   $instance = '${{ parameters.instanceNumber }}'
-                  if([string]::IsNullOrWhiteSpace($instance)){ $instance = '__INSTANCE_NUMBER__' }
+                  if([string]::IsNullOrWhiteSpace($instance)){ $instance = '${{ parameters.instanceNumber }}' }
                   $useLocalParam = $false
                   try { $useLocalParam = [bool]('${{ parameters.useAzureLocal }}') } catch { $useLocalParam = $false }
                   if ($useLocalParam) { $linuxPool = "KubernetesPoolOnPremLinux$instance"; $windowsPool = "KubernetesPoolOnPremWindows$instance" } else { $linuxPool = "KubernetesPoolLinux$instance"; $windowsPool = "KubernetesPoolWindows$instance" }

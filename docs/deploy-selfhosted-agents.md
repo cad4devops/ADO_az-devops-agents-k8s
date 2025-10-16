@@ -28,6 +28,17 @@ Inputs / Parameters (notable changes)
 - `azDoToken` / AZDO_PAT fallback: If the pipeline parameter for an Azure DevOps token is not explicitly provided the helper accepts the environment variable `AZDO_PAT` as a fallback.
 - ACR credentials: the helper accepts `ACR_ADO_USERNAME` and `ACR_ADO_PASSWORD` from the environment. If one is supplied the other is required — the helper will fail fast on partial credential input to avoid ambiguous failures during image push/pull.
 - Prebaked images: expect **no** runtime agent download; startup logs should contain `Using pre-baked Azure Pipelines agent`.
+- `linuxImageVariant`: Selects which Linux image repository is referenced in the generated Helm values.
+  - `dind` (default as of Oct 2025): uses the DinD-capable image repository `linux-sh-agent-dind` and the deploy helper automatically injects a `linux.dind` values block (chart 0.2.0+) enabling a privileged, root (`runAsUser: 0`) container with an in-pod Docker daemon.
+  - `docker` (legacy): mounts the host / external Docker socket into the pod (no in-pod daemon). Retain only if your cluster policy forbids privileged DinD.
+  - `ubuntu22` (legacy / alternate base): historical variant; not DinD‑aware. Will be phased out.
+  Behavior details:
+  - When `dind` is selected the script emits a `linux.dind` block with `enabled: true`, `privileged: true` and an explicit `securityContext.runAsUser=0` so docker-in-docker can start properly.
+  - Weekly image refresh pipeline hard‑codes `LINUX_REPOSITORY_NAME=linux-sh-agent-dind`, ensuring rebuilt tags always include the DinD variant; no action required unless opting out.
+  - To force a one-off local bootstrap build to target DinD before pipelines exist, set ` $env:LINUX_REPOSITORY_NAME='linux-sh-agent-dind' ` prior to running `bootstrap-and-build.ps1` (or let pipeline builds supply it).
+  - If you accidentally pass an unexpanded literal (e.g. `'${env:ACR_NAME}'`) as registry name the Helm upgrade may fail and rollback, leaving you with the prior (non‑DinD) deployment — always verify with `helm get values` that `linux.dind.enabled` is present after deployment.
+
+Security note (DinD): The DinD variant deliberately runs privileged and as root to launch its own `dockerd`. Apply PodSecurityPolicy / Pod Security Admission exceptions or namespace isolation accordingly. If your security posture forbids cluster‑wide privileged pods, remain on the `docker` variant (host socket mount) or supply a custom rootless image and chart patch (not provided here).
 
 Outputs
 
@@ -65,6 +76,10 @@ Troubleshooting
 - **KEDA ScaledObject failures**: If KEDA fails with "error parsing azure Pipelines metadata: no poolName or poolID given", ensure AZDO_PAT is set so the script can query Azure DevOps API to resolve pool IDs. The Helm chart templates now conditionally render KEDA ScaledObjects only when valid poolID values are present (not empty, not placeholder values like "x" or "y").
 - **PAT validation**: The deploy script performs fail-fast validation on AZDO_PAT, rejecting empty values or common placeholder strings like 'your-pat-token-here'. Check the masked PAT output in logs (shows first 4 + last 4 characters) to verify which token was resolved.
 - **Helm template type errors**: If you see "error calling ne: incompatible types for comparison", this has been fixed in the ScaledObject templates which now convert poolID values to strings before comparison.
+- **DinD pod fails to start dockerd**: Check container logs for the `[DinD]` lines. Ensure `linux.dind.enabled=true` produced a privileged securityContext. If `dockerd` exits repeatedly add `linux.dind.daemonArgs="--debug"` for verbose logs.
+- **DinD block missing after successful Helm run**: The upgrade may have rolled back due to an earlier image name or pull error. Run `helm history <release>`; if the latest revision shows `FAILED` you are seeing the previous (non‑DinD) state. Fix the image issue (usually malformed ACR name) and redeploy.
+- **`docker run hello-world` hangs**: Verify the daemon became ready (look for `[DinD] Docker daemon is ready.`). If missing, inspect `kubectl exec` into the pod and run `ps -ef | grep dockerd`.
+- **Need to test image without registering agent**: Set `linux.dind.skipAgentConfig=true` (or temporarily edit values) and then exec into the pod to run Docker commands.
 
 Notes
 

@@ -23,6 +23,10 @@ parameters:
   - name: useAzureLocal
     type: boolean
     default: false
+  - name: ubuntuOnPremPoolName
+    type: string
+    default: "__UBUNTU_ONPREM_POOL_NAME__"
+
 resources:
   pipelines:
     - pipeline: deployAgentsHelm
@@ -42,7 +46,7 @@ stages:
         displayName: Load configuration artifact
         pool:
           ${{ if parameters.useOnPremAgents }}:
-            name: __UBUNTU_ONPREM_POOL_NAME__
+            name: ${{ parameters.ubuntuOnPremPoolName }}
           ${{ else }}:
             vmImage: ubuntu-latest
         steps:
@@ -92,7 +96,7 @@ stages:
         displayName: "Validate Linux self-hosted pool ($[ dependencies.LoadConfig.outputs['LoadConfig.ParseConfig.poolNameLinux'] ])"
         pool:
           ${{ if parameters.useOnPremAgents }}:
-            name: __UBUNTU_ONPREM_POOL_NAME__
+            name: ${{ parameters.ubuntuOnPremPoolName }}
           ${{ else }}:
             vmImage: ubuntu-latest
         variables:
@@ -316,7 +320,7 @@ stages:
         displayName: "Validate Windows self-hosted pool ($[ dependencies.LoadConfig.outputs['LoadConfig.ParseConfig.poolNameWindows'] ])"
         pool:
           ${{ if parameters.useOnPremAgents }}:
-            name: __UBUNTU_ONPREM_POOL_NAME__
+            name: ${{ parameters.ubuntuOnPremPoolName }}
           ${{ else }}:
             vmImage: ubuntu-latest
         variables:
@@ -544,7 +548,7 @@ stages:
         displayName: Validation Summary
         pool:
           ${{ if parameters.useOnPremAgents }}:
-            name: __UBUNTU_ONPREM_POOL_NAME__
+            name: ${{ parameters.ubuntuOnPremPoolName }}
           ${{ else }}:
             vmImage: ubuntu-latest
         variables:

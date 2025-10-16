@@ -35,6 +35,18 @@ regsecret:
 # Configuration for Linux Self-Hosted agents
 linux:
   enabled: false
+  # Docker-in-Docker (DinD) configuration. When enabled the container starts its own
+  # dockerd (ENABLE_DIND=true) instead of mounting the host /var/run/docker.sock.
+  # The startup script already supports ENABLE_DIND and optional SKIP_AGENT_CONFIG.
+  dind:
+    enabled: false               # set true for privileged DinD mode
+    privileged: true             # add securityContext.privileged & runAsUser: 0
+    skipAgentConfig: false       # set true to keep container idle (image/DinD validation)
+    daemonArgs: ""              # extra dockerd args (e.g. --storage-driver=overlay2)
+    storage:
+      type: emptyDir             # emptyDir | hostPath | pvc
+      hostPath: /var/lib/docker  # used when type=hostPath
+      pvcName: ""              # existing PVC when type=pvc
   deploy:
     name: azsh-linux-agent
     replicas: 1

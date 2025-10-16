@@ -33,3 +33,57 @@ Pipeline authors
 Use the included pipeline templates which now delegate to the same PowerShell scripts in this repo; that keeps CI logic small and consistent with local runs.
 
 If you need to customize values directly, you can still pass Helm overrides or run `helm upgrade --install` yourself with the chart under `helm-charts-v2/az-selfhosted-agents`.
+
+Docker-in-Docker (DinD) Support
+-------------------------------
+The chart (version 0.2.0+) supports running Linux agents with an internal Docker daemon instead of mounting the host `/var/run/docker.sock`.
+
+When DinD is enabled (`linux.dind.enabled=true`):
+- The container runs privileged (if `linux.dind.privileged=true`).
+- The startup script starts `dockerd` with `ENABLE_DIND=true`.
+- A writable volume is mounted at `/var/lib/docker` (default: `emptyDir`).
+- The host docker socket is **not** mounted.
+
+Values block example:
+```yaml
+linux:
+    enabled: true
+    dind:
+        enabled: true
+        privileged: true
+        skipAgentConfig: false
+        daemonArgs: "--storage-driver=overlay2"
+        storage:
+            type: emptyDir
+```
+
+Helm CLI example:
+```bash
+helm upgrade --install az-agents ./helm-charts-v2/az-selfhosted-agents \
+    --namespace az-devops-linux-003 --create-namespace \
+    --set linux.enabled=true \
+    --set linux.dind.enabled=true \
+    --set linux.deploy.container.image=myacr.azurecr.io/linux-sh-agent-dind:latest
+```
+
+Quick image/DinD validation (skip agent registration):
+```bash
+helm upgrade --install az-agents ./helm-charts-v2/az-selfhosted-agents \
+    --namespace az-devops-linux-003 --create-namespace \
+    --set linux.enabled=true \
+    --set linux.dind.enabled=true \
+    --set linux.dind.skipAgentConfig=true
+kubectl exec -n az-devops-linux-003 deploy/azsh-linux-agent -- docker run --rm hello-world
+```
+
+Storage options:
+- `emptyDir` (default) ephemeral; suitable for ephemeral agents.
+- `hostPath` (set `linux.dind.storage.type=hostPath` and `hostPath=/path`) shares node disk — persistent but risk of cross-pod interference.
+- `pvc` (provide existing claim via `pvcName`) for controlled lifecycle.
+
+Security considerations:
+- DinD requires `privileged` unless using a rootless Docker daemon (not currently configured).
+- Ensure cluster PodSecurity / PSP (if any) allow privileged pods in the target namespace.
+- Consider resource requests (CPU/memory) to accommodate the daemon; heavy builds may require tuning.
+
+To revert to host-socket mode set `linux.dind.enabled=false` or omit the block.
