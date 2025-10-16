@@ -875,6 +875,14 @@ stages:
                 $lines.Add("### az version")
                 $azVersion = Invoke-Docker -label 'Azure CLI version' -command @('bash','-lc','az --version')
                 $lines.AddRange([string[]]$azVersion)
+                $lines.Add("")
+                $lines.Add("### zip --version (first line)")
+                $zipVersion = Invoke-Docker -label 'zip version' -command @('bash','-lc','if command -v zip >/dev/null 2>&1; then zip --version | head -n 1; else echo "zip not installed"; fi')
+                $lines.AddRange([string[]]$zipVersion)
+                $lines.Add("")
+                $lines.Add("### unzip -v (first line)")
+                $unzipVersion = Invoke-Docker -label 'unzip version' -command @('bash','-lc','if command -v unzip >/dev/null 2>&1; then unzip -v | head -n 1; else echo "unzip not installed"; fi')
+                $lines.AddRange([string[]]$unzipVersion)
 
                 $reportPath = Join-Path $reportDir 'linux.md'
                 $lines | Out-File -FilePath $reportPath -Encoding utf8
