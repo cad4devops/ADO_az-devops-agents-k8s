@@ -1,3 +1,97 @@
+<#
+.SYNOPSIS
+    Builds and pushes Linux Azure DevOps agent Docker images to Azure Container Registry.
+
+.DESCRIPTION
+    This script builds Docker images for Linux-based Azure DevOps self-hosted agents and pushes
+    them to an Azure Container Registry (ACR). It supports two build modes:
+    
+    1. PRE-BAKED (default): Downloads the Azure Pipelines agent at build time and includes it
+       in the image. This results in faster agent startup times but larger images.
+    
+    2. STANDARD: The agent is downloaded at container runtime. This creates smaller images
+       but has slower startup times.
+    
+    The script automatically:
+    - Normalizes unqualified ACR names by appending .azurecr.io
+    - Fetches the latest Azure Pipelines agent version if not specified (prebaked mode)
+    - Creates multiple image tags including base, versioned, and latest tags
+    - Logs into ACR using Azure CLI
+    - Pushes all tags to the registry with error handling
+
+.PARAMETER ContainerRegistryName
+    The name or FQDN of the Azure Container Registry. If unqualified (no dots), 
+    '.azurecr.io' will be appended automatically. Can be set via ACR_NAME environment variable.
+    Example: 'cragents003c66i4n7btfksg' or 'cragents003c66i4n7btfksg.azurecr.io'
+
+.PARAMETER RepositoryName
+    The Docker repository name within the ACR. Defaults to 'linux-sh-agent-docker'.
+    Can be set via LINUX_REPOSITORY_NAME environment variable.
+
+.PARAMETER BaseTag
+    The base tag for the image, typically indicating the OS version.
+    Defaults to 'ubuntu-24.04'. Can be set via LINUX_BASE_TAG environment variable.
+
+.PARAMETER TagSuffix
+    Optional suffix to append to the base tag, typically a date and commit SHA.
+    Example: '20250920-a1b2c3d'. Can be set via TAG_SUFFIX environment variable.
+
+.PARAMETER SemVer
+    Semantic version to use as an additional tag (e.g., '1.0.0').
+    Can be set via SEMVER_EFFECTIVE environment variable.
+
+.PARAMETER DisableLatest
+    If specified, the 'latest' tag will not be applied to the image.
+
+.PARAMETER DefaultAcr
+    Default ACR name to use when ContainerRegistryName is not provided.
+    This is mandatory to ensure the script always has a target registry.
+
+.PARAMETER UsePrebaked
+    Use the prebaked Dockerfile that includes the agent at build time (default: true).
+    This is the recommended option for production as it provides faster agent startup.
+
+.PARAMETER UseStandard
+    Use the standard Dockerfile that downloads the agent at runtime.
+    This overrides -UsePrebaked if both are specified.
+
+.PARAMETER AgentVersion
+    Specific Azure Pipelines agent version to use for prebaked images.
+    If not specified, the latest version is fetched from GitHub releases.
+    Example: '4.261.0'
+
+.EXAMPLE
+    pwsh ./01-build-and-push.ps1 -DefaultAcr 'cragents003c66i4n7btfksg'
+    
+    Builds and pushes a prebaked Linux agent image using the latest agent version
+    to the specified ACR.
+
+.EXAMPLE
+    pwsh ./01-build-and-push.ps1 -DefaultAcr 'myregistry' -UseStandard -TagSuffix '20250101-abc123'
+    
+    Builds and pushes a standard (runtime download) Linux agent image with a specific tag suffix.
+
+.EXAMPLE
+    $env:ACR_NAME = 'cragents003.azurecr.io'
+    $env:TAG_SUFFIX = '20250920-a1b2c3d'
+    $env:SEMVER_EFFECTIVE = '1.2.3'
+    pwsh ./01-build-and-push.ps1 -DefaultAcr 'fallback'
+    
+    Uses environment variables for configuration (common in CI pipelines).
+
+.NOTES
+    Prerequisites:
+    - Docker must be installed and running
+    - Azure CLI (az) must be installed and authenticated
+    - Current directory must be azsh-linux-agent/ containing the Dockerfiles
+    
+    CI Usage:
+    This script is designed to be called from Azure DevOps pipelines. Environment variables
+    are preferred in CI scenarios to avoid exposing credentials in logs.
+    
+    File: azsh-linux-agent/01-build-and-push.ps1
+#>
+
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $false)]
