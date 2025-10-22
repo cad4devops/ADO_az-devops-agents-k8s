@@ -23,6 +23,19 @@ parameters:
   - name: useAzureLocal
     type: boolean
     default: false
+  - name: windowsImageVariant
+    type: string
+    default: "docker"
+    values:
+      - docker
+      - dind
+  - name: windowsVersion
+    type: string
+    default: "2022"
+    values:
+      - "2019"
+      - "2022"
+      - "2025"
 
 stages:
   - stage: ${{ parameters.stageName }}
@@ -136,6 +149,70 @@ stages:
                     if ($azInfo.PSObject.Properties.Name -contains 'azure-cli-ml') {
                         Write-Host "azure-cli-ml extension version: $($azInfo.'azure-cli-ml')"
                     }
+              - ${{ if eq(parameters.windowsImageVariant, 'dind') }}:
+                  - task: PowerShell@2
+                    displayName: Docker DinD smoke test (Windows)
+                    inputs:
+                      targetType: inline
+                      pwsh: false
+                      script: |
+                        Set-StrictMode -Version Latest
+                        $ErrorActionPreference = 'Stop'
+
+                        $dockerCmd = Get-Command docker -ErrorAction SilentlyContinue
+                        if (-not $dockerCmd) {
+                            throw 'docker.exe not found in PATH. Windows DinD agents should include the Docker CLI.'
+                        }
+
+                        $pipePath = '\\.\pipe\docker_engine'
+
+                        Write-Host "Checking for Docker daemon access via named pipe: $pipePath"
+                        if (-not (Test-Path $pipePath)) {
+                            Write-Error "Docker engine pipe '$pipePath' not found. This Windows DinD agent should have the host Docker pipe mounted."
+                            Write-Host "Troubleshooting info:"
+                            Write-Host "- Ensure Docker Engine is installed on the Windows host node"
+                            Write-Host "- Verify Helm values have windows.dind.enabled: true"
+                            Write-Host "- Check volume mount in deployment: kubectl get deployment -n <namespace> -o yaml | Select-String docker"
+                            throw "Docker engine pipe not available. Cannot proceed with DinD smoke test."
+                        }
+
+                        Write-Host "✓ Docker engine pipe found at $pipePath"
+                        Write-Host "Docker CLI executable detected at $($dockerCmd.Source)"
+                        & $dockerCmd.Source version
+                        if ($LASTEXITCODE -ne 0) {
+                            throw "docker version failed with exit code $LASTEXITCODE"
+                        }
+
+                        $map = @{
+                            '2019' = 'mcr.microsoft.com/windows/nanoserver:1809'
+                            '2022' = 'mcr.microsoft.com/windows/nanoserver:ltsc2022'
+                            '2025' = 'mcr.microsoft.com/windows/nanoserver:ltsc2025'
+                        }
+
+                        $windowsVersion = '${{ parameters.windowsVersion }}'
+                        if ([string]::IsNullOrWhiteSpace($windowsVersion)) { $windowsVersion = '2022' }
+                        $testImage = $map[$windowsVersion]
+                        if (-not $testImage) { $testImage = 'mcr.microsoft.com/windows/nanoserver:ltsc2022' }
+
+                        Write-Host "Using Docker test image '$testImage' for windowsVersion=$windowsVersion"
+
+                        & $dockerCmd.Source pull $testImage
+                        if ($LASTEXITCODE -ne 0 -and $windowsVersion -eq '2025') {
+                            Write-Warning "docker pull failed for $testImage (windowsVersion=$windowsVersion); attempting fallback to nanoserver:ltsc2022"
+                            $testImage = 'mcr.microsoft.com/windows/nanoserver:ltsc2022'
+                            & $dockerCmd.Source pull $testImage
+                        }
+                        if ($LASTEXITCODE -ne 0) {
+                            throw "docker pull failed for $testImage"
+                        }
+
+                        & $dockerCmd.Source run --rm $testImage cmd.exe /c "echo Windows DinD smoke test"
+                        if ($LASTEXITCODE -ne 0) {
+                            throw "docker run failed for $testImage"
+                        }
+
+                        Write-Host "✓ Docker DinD smoke test completed successfully for $testImage"
+                        Write-Host "✓ Windows DinD agent can access host Docker daemon via named pipe"
               - template: ../scripts/kubernetes/windows/hello-world.yml
                 parameters:
                   helloWaitSeconds: ${{ parameters.helloWaitSeconds }}

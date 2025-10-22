@@ -56,6 +56,7 @@ param(
     [Parameter(Mandatory = $false)][string]$WindowsOnPremPoolName = "WindowsLatestPoolOnPrem",
     [Parameter(Mandatory = $false)][string]$UseOnPremAgents = "false",
     [Parameter(Mandatory = $false)][switch]$UseAzureLocal,
+    [Parameter(Mandatory = $false)][switch]$EnsureWindowsDocker,
 
     # Optional: create (idempotently) an Azure Resource Manager service connection using Workload Identity Federation
     [Parameter(Mandatory = $false)][switch]$CreateWifServiceConnection,
@@ -104,6 +105,18 @@ param(
     # Attempt automatic detection & repair of azure-devops CLI extension permission issues (Access is denied) by removing & reinstalling the extension.
     [Parameter(Mandatory = $false)][switch]$AutoRepairAzDevOpsExtension
 )
+
+$scriptRoot = Split-Path -Parent $PSCommandPath
+$sharedInstallerPath = Join-Path $scriptRoot 'scripts/Install-DockerOnWindowsNodes.ps1'
+if (-not (Test-Path -LiteralPath $sharedInstallerPath)) {
+    throw "Shared installer module not found at $sharedInstallerPath"
+}
+. $sharedInstallerPath
+
+# Ensure the shared installer exported the expected function before continuing.
+if (-not (Get-Command -Name Install-DockerOnWindowsNodes -CommandType Function -ErrorAction SilentlyContinue)) {
+    throw 'Install-DockerOnWindowsNodes not defined after importing shared installer module.'
+}
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -1001,6 +1014,27 @@ else {
         Write-Host "Invoking windows build script in $winDir with explicit parameters"
         pwsh -NoProfile -NonInteractive -Command $cmd
         if ($LASTEXITCODE -ne 0) { Write-Warning "Windows build invocation exited with code $LASTEXITCODE" }
+    }
+}
+
+
+$expectedWindowsNodes = 0
+try { $expectedWindowsNodes = [Math]::Max($WindowsNodeCount, 0) } catch { $expectedWindowsNodes = 0 }
+$shouldInstallDocker = $false
+if ($EnsureWindowsDocker.IsPresent) {
+    $shouldInstallDocker = $true
+}
+elseif ($UseAzureLocal.IsPresent -or $EnableWindows.IsPresent -or $expectedWindowsNodes -gt 0) {
+    $shouldInstallDocker = $true
+}
+
+if ($shouldInstallDocker) {
+    Write-Host "Ensuring Docker Engine is installed on Windows Kubernetes nodes." -ForegroundColor Cyan
+    try {
+        Install-DockerOnWindowsNodes -KubeConfigPath $KubeConfigFilePath
+    }
+    catch {
+        Write-Warning ("Failed to ensure Docker installation on Windows nodes: {0}" -f $_.Exception.Message)
     }
 }
 

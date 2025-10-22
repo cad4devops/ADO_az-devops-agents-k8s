@@ -130,6 +130,33 @@ Key parameters
 - `-AzureDevOpsPatTokenEnvironmentVariableName` (optional): environment variable name for PAT (default: "AZDO_PAT").
 - Various pipeline name parameters for customizing created pipeline names.
 
+### Linux image variant (DinD default)
+
+As of Oct 2025 the canonical Linux agent image built / refreshed by the weekly pipeline is the DinD variant (`linux-sh-agent-dind`).
+
+Key points:
+
+- The weekly image refresh pipeline sets `LINUX_REPOSITORY_NAME=linux-sh-agent-dind`, rebuilding and tagging the DinD image automatically.
+- The Helm deploy flow (see `deploy-selfhosted-agents.md`) now defaults `linuxImageVariant` to `dind`, which injects a `linux.dind` values block (`privileged: true`, `runAsUser: 0`).
+- Local bootstrap runs that perform image builds (when you omit `-BuildInPipeline`) will honor the environment variable `LINUX_REPOSITORY_NAME` if you set it beforehand. If unset, the build script still maps the DinD repo to the Dockerfile used for the docker variant, so no separate Dockerfile maintenance is required.
+- To explicitly force a local DinD-tagged build before pipelines exist:
+
+  ```powershell
+  $env:LINUX_REPOSITORY_NAME = 'linux-sh-agent-dind'
+  pwsh -NoProfile -File .\bootstrap-and-build.ps1 -InstanceNumber 003 -Location canadacentral -ADOCollectionName <org> -AzureDevOpsProject <proj> -AzureDevOpsRepo <repo>
+  ```
+
+- After deployment, verify DinD with:
+
+  ```bash
+  helm get values azdevops-agents-<instance> -n az-devops-linux-<instance> | grep -A3 'linux:'
+  kubectl get deploy azsh-linux-agent -n az-devops-linux-<instance> -o yaml | grep -A6 securityContext
+  ```
+
+Rollback caveat: If a Helm upgrade fails due to an image pull / name error, atomic rollback will revert to the prior (non-DinD) revision. Always confirm `linux.dind.enabled: true` is present after the upgrade.
+
+Security note: DinD runs privileged and as root. If your cluster policy forbids privileged pods, override the deploy pipeline parameter to use the legacy `docker` variant instead.
+
 ### Workload Identity Federation (WIF) Parameters
 
 The script can fail fast ensuring a WIF Azure RM service connection and its federated credential before image builds.

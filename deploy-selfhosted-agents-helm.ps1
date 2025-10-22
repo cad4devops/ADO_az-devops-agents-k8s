@@ -33,6 +33,7 @@ param(
     [Parameter(Mandatory = $false)] [switch] $DeployLinux = $true,
     [Parameter(Mandatory = $false)] [switch] $DeployWindows = $true,
     [Parameter(Mandatory = $false)] [string] $WindowsVersion = '2022',
+    [Parameter(Mandatory = $false)] [ValidateSet('docker', 'dind')] [string] $WindowsImageVariant = 'docker',
     [Parameter(Mandatory = $false)] [ValidateSet('docker', 'dind', 'ubuntu22')] [string] $LinuxImageVariant = 'docker',
     [Parameter(Mandatory = $true)] [string] $AcrName, #'cragents003c66i4n7btfksg'
     [Parameter(Mandatory = $true)] [string] $AzureDevOpsOrgUrl, #'https://dev.azure.com/cad4devops',    
@@ -489,12 +490,23 @@ switch ($LinuxImageVariant) {
     default { $linuxRepo = "$AcrName.azurecr.io/linux-sh-agent-docker" }
 }
 
+switch ($WindowsImageVariant) {
+    'dind' { $winRepo = "$AcrName.azurecr.io/windows-sh-agent-$WindowsVersion-dind" }
+    default { $winRepo = "$AcrName.azurecr.io/windows-sh-agent-$WindowsVersion" }
+}
+
 # Advisory: if user selected non-dind variant but intends to run docker build commands without host socket, emit guidance.
 if ($DeployLinux -and $LinuxImageVariant -ne 'dind') {
     Write-Host "INFO: LinuxImageVariant is '$LinuxImageVariant'. Host docker socket will be mounted (not DinD)." -ForegroundColor Cyan
     Write-Host "      To use internal Docker daemon (DinD) set -LinuxImageVariant dind (enables privileged container & /var/lib/docker volume)." -ForegroundColor Cyan
 }
-$winRepo = "$AcrName.azurecr.io/windows-sh-agent-$WindowsVersion"
+
+if ($DeployWindows -and $WindowsImageVariant -ne 'dind') {
+    Write-Host "INFO: WindowsImageVariant is '$WindowsImageVariant'. Host docker mount will be used." -ForegroundColor Cyan
+}
+elseif ($DeployWindows -and $WindowsImageVariant -eq 'dind') {
+    Write-Host "INFO: WindowsImageVariant 'dind' selected. Ensure cluster nodes permit DinD scenario." -ForegroundColor Cyan
+}
 
 $yamlLines = @()
 
@@ -538,6 +550,10 @@ $yamlLines += ('      image: ' + ($linuxRepo + ':latest'))
 $yamlLines += '      pullPolicy: Always'
 $yamlLines += 'windows:'
 $yamlLines += ('  enabled: ' + $enabledWindows)
+if ($WindowsImageVariant -eq 'dind') {
+    $yamlLines += '  dind:'
+    $yamlLines += '    enabled: true'
+}
 $yamlLines += '  deploy:'
 $yamlLines += '    container:'
 $yamlLines += ('      image: ' + ($winRepo + ':latest'))

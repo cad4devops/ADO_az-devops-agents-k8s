@@ -1,0 +1,67 @@
+# Windows Server 2025 agent image with Docker CLI for remote daemon usage
+# Bundles the Azure Pipelines agent and Docker/BuildKit client tooling while
+# defaulting to the host named pipe (\\.\\pipe\\docker_engine) for docker commands.
+
+FROM mcr.microsoft.com/windows/servercore:ltsc2025
+
+ARG AGENT_VERSION=4.261.0
+ARG DOCKER_VERSION=26.1.1
+ARG BUILDX_VERSION=v0.15.1
+
+WORKDIR /azp/
+
+COPY ./Install-WindowsAgentTools.ps1 C:/temp/Install-WindowsAgentTools.ps1
+RUN powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File C:\temp\Install-WindowsAgentTools.ps1
+RUN del C:\temp\Install-WindowsAgentTools.ps1
+
+RUN powershell -Command " \
+    $ErrorActionPreference = 'Stop'; \
+    $ProgressPreference = 'SilentlyContinue'; \
+    $zipPath = 'C:\\temp\\docker.zip'; \
+    $dockerUrl = \"https://download.docker.com/win/static/stable/x86_64/docker-${env:DOCKER_VERSION}.zip\"; \
+    New-Item -ItemType Directory -Path 'C:\\temp' -Force | Out-Null; \
+    Write-Host \"Downloading Docker CLI ${env:DOCKER_VERSION}...\"; \
+    Invoke-WebRequest -Uri $dockerUrl -OutFile $zipPath -UseBasicParsing; \
+    Expand-Archive -LiteralPath $zipPath -DestinationPath 'C:\Program Files' -Force; \
+    Remove-Item $zipPath -Force; \
+    $dockerRoot = 'C:\Program Files\\docker'; \
+    $desktopBin = 'C:\Program Files\\Docker\\Docker\\resources\\bin'; \
+    New-Item -ItemType Directory -Path $desktopBin -Force | Out-Null; \
+    Get-ChildItem -Path $dockerRoot -Filter '*.exe' -Recurse | ForEach-Object { \
+    $source = $_.FullName; \
+    $target = Join-Path $desktopBin $_.Name; \
+    $sourceFull = [System.IO.Path]::GetFullPath($source); \
+    $targetFull = [System.IO.Path]::GetFullPath($target); \
+    if ([string]::Equals($sourceFull, $targetFull, [StringComparison]::OrdinalIgnoreCase)) { return } \
+    Copy-Item $sourceFull -Destination $targetFull -Force; \
+    }; \
+    $pluginPath = Join-Path $dockerRoot 'cli-plugins'; \
+    New-Item -ItemType Directory -Path $pluginPath -Force | Out-Null; \
+    $buildxFile = \"buildx-${env:BUILDX_VERSION}.windows-amd64.exe\"; \
+    $buildxUrl = \"https://github.com/docker/buildx/releases/download/${env:BUILDX_VERSION}/$buildxFile\"; \
+    Write-Host \"Downloading Docker Buildx ${env:BUILDX_VERSION}...\"; \
+    Invoke-WebRequest -Uri $buildxUrl -OutFile (Join-Path $pluginPath 'docker-buildx.exe') -UseBasicParsing; \
+    New-Item -ItemType Directory -Path 'C:\\ProgramData\\docker' -Force | Out-Null; \
+    Write-Host 'Docker CLI and Buildx ready.'"
+
+ENV PATH="C:\\Program Files\\Docker\\Docker\\resources\\bin;C:\\Program Files\\docker;C:\\Program Files\\dotnet;C:\\Program Files\\PowerShell\\7;C:\\Program Files (x86)\\Microsoft SDKs\\Azure\\CLI2\\wbin;C:\\Windows\\system32;C:\\Windows;C:\\Windows\\System32\\Wbem;C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\;C:\\Windows\\System32\\OpenSSH\\"
+
+RUN powershell -Command " \
+    $ErrorActionPreference = 'Stop'; \
+    $ProgressPreference = 'SilentlyContinue'; \
+    $agentVersion = $env:AGENT_VERSION; \
+    Write-Host \"Downloading Azure Pipelines agent v${agentVersion}...\"; \
+    $downloadUrl = \"https://download.agent.dev.azure.com/agent/${agentVersion}/vsts-agent-win-x64-${agentVersion}.zip\"; \
+    Invoke-WebRequest -Uri $downloadUrl -OutFile 'C:\\azp\\agent.zip' -UseBasicParsing; \
+    New-Item -Path 'C:\\azp\\agent' -ItemType Directory -Force | Out-Null; \
+    Expand-Archive -Path 'C:\\azp\\agent.zip' -DestinationPath 'C:\\azp\\agent' -Force; \
+    Remove-Item 'C:\\azp\\agent.zip' -Force; \
+    Write-Host \"Agent v${agentVersion} extraction complete.\""
+
+COPY ./start-prebaked.ps1 ./start.ps1
+
+ENV DOCKER_HOST="npipe:////./pipe/docker_engine"
+ENV DOCKER_BUILDKIT="1"
+ENV DOCKER_CONFIG="C:\\ProgramData\\docker"
+
+CMD powershell .\start.ps1

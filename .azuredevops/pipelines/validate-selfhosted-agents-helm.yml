@@ -87,6 +87,18 @@ stages:
                 Write-Host "Exported poolNameLinux=$poolNameLinux"
                 Write-Host "##vso[task.setvariable variable=poolNameWindows;isOutput=true]$poolNameWindows"
                 Write-Host "Exported poolNameWindows=$poolNameWindows"
+                $windowsVersion = [string]$cfg.windowsVersion
+                if ([string]::IsNullOrWhiteSpace($windowsVersion)) { $windowsVersion = '2022' }
+                Write-Host "##vso[task.setvariable variable=windowsVersion;isOutput=true]$windowsVersion"
+                Write-Host "Exported windowsVersion=$windowsVersion"
+                $windowsVariant = [string]$cfg.windowsImageVariant
+                if ([string]::IsNullOrWhiteSpace($windowsVariant)) { $windowsVariant = 'docker' }
+                Write-Host "##vso[task.setvariable variable=windowsImageVariant;isOutput=true]$windowsVariant"
+                Write-Host "Exported windowsImageVariant=$windowsVariant"
+                $linuxVariant = [string]$cfg.linuxImageVariant
+                if ([string]::IsNullOrWhiteSpace($linuxVariant)) { $linuxVariant = 'dind' }
+                Write-Host "##vso[task.setvariable variable=linuxImageVariant;isOutput=true]$linuxVariant"
+                Write-Host "Exported linuxImageVariant=$linuxVariant"
 
   - stage: Validate
     displayName: Validate self-hosted agent pools
@@ -332,6 +344,10 @@ stages:
             value: $[ dependencies.LoadConfig.outputs['LoadConfig.ParseConfig.useAzureLocal'] ]
           - name: poolName
             value: $[ dependencies.LoadConfig.outputs['LoadConfig.ParseConfig.poolNameWindows'] ]
+          - name: windowsImageVariant
+            value: $[ dependencies.LoadConfig.outputs['LoadConfig.ParseConfig.windowsImageVariant'] ]
+          - name: windowsVersion
+            value: $[ dependencies.LoadConfig.outputs['LoadConfig.ParseConfig.windowsVersion'] ]
           - name: windowsHelloWaitSeconds
             value: ${{ parameters.windowsHelloWaitSeconds }}
         steps:
@@ -361,6 +377,12 @@ stages:
                 Write-Host "##vso[task.setvariable variable=useAzureLocal]$useLocalStr"
                 $poolName = if($useLocalVal) { "KubernetesPoolOnPremWindows$instance" } else { "KubernetesPoolWindows$instance" }
                 Write-Host "##vso[task.setvariable variable=poolName]$poolName"
+                $variant = [string]$cfg.windowsImageVariant
+                if ([string]::IsNullOrWhiteSpace($variant)) { $variant = 'docker' }
+                Write-Host "##vso[task.setvariable variable=windowsImageVariant]$variant"
+                $winVersion = [string]$cfg.windowsVersion
+                if ([string]::IsNullOrWhiteSpace($winVersion)) { $winVersion = '2022' }
+                Write-Host "##vso[task.setvariable variable=windowsVersion]$winVersion"
                 if($deploy){ Write-Host "##vso[task.setvariable variable=shouldRun]true"; Write-Host "Will run Windows validation" } else { Write-Host "##vso[task.setvariable variable=shouldRun]false"; Write-Host "Skipping Windows validation per config" }
           - task: PowerShell@2
             displayName: "Poll Windows pool ($(poolName))"
@@ -453,7 +475,13 @@ stages:
                 # Convert to short branch name (strip refs/heads/)
                 $branch = $branch -replace '^refs/heads/',''
 
-                $runJson = & az pipelines run --name $pipelineName --branch $branch --parameters instanceNumber=$instance os=windows helloWaitSeconds=$(windowsHelloWaitSeconds) useAzureLocal=$useLocalParam --output json 2>&1
+                $winVariant = [string]$cfg.windowsImageVariant
+                if ([string]::IsNullOrWhiteSpace($winVariant)) { $winVariant = 'docker' }
+                $winVersion = [string]$cfg.windowsVersion
+                if ([string]::IsNullOrWhiteSpace($winVersion)) { $winVersion = '2022' }
+                Write-Host "Using windowsImageVariant='$winVariant' windowsVersion='$winVersion' for validation run"
+
+                $runJson = & az pipelines run --name $pipelineName --branch $branch --parameters instanceNumber=$instance os=windows helloWaitSeconds=$(windowsHelloWaitSeconds) useAzureLocal=$useLocalParam windowsImageVariant=$winVariant windowsVersion=$winVersion --output json 2>&1
 
 
                 if($LASTEXITCODE -ne 0){ Write-Error $runJson; throw 'Failed to queue sample pipeline run via az pipelines run' }
@@ -579,12 +607,18 @@ stages:
                 $deployLinux = 'False'
                 $deployWindows = 'False'
                 $org = ''
+                $linuxVariant = 'unknown'
+                $windowsVariant = 'unknown'
+                $windowsVersion = 'unknown'
                 if(Test-Path $cfgPath){
                   $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
                   $instance = $cfg.instanceNumber
                   $deployLinux = $cfg.deployLinux
                   $deployWindows = $cfg.deployWindows
                   $org = $cfg.azureDevOpsOrgUrl
+                  $linuxVariant = if ($cfg.linuxImageVariant) { [string]$cfg.linuxImageVariant } else { 'dind' }
+                  $windowsVariant = if ($cfg.windowsImageVariant) { [string]$cfg.windowsImageVariant } else { 'docker' }
+                  $windowsVersion = if ($cfg.windowsVersion) { [string]$cfg.windowsVersion } else { 'unknown' }
                 }
 
                 $linuxRes = '$(linuxResult)'
@@ -599,9 +633,12 @@ stages:
                   $lines += "Linux test result: $linuxRes"
                   if($linuxRunId){ $lines += "Linux sample run id: $linuxRunId" }
                   if($linuxRunUrl){ $lines += "Linux sample run URL: $linuxRunUrl" }
+                  $lines += "Linux image variant: $linuxVariant"
                 } else { $lines += 'Linux deployment skipped' }
                 if($deployWindows -eq $true -or $deployWindows -eq 'True'){
                   $lines += "Windows test result: $winRes"
+                  $lines += "Windows version: $windowsVersion"
+                  $lines += "Windows image variant: $windowsVariant"
                   if($windowsRunId){ $lines += "Windows sample run id: $windowsRunId" }
                   if($windowsRunUrl){ $lines += "Windows sample run URL: $windowsRunUrl" }
                 } else { $lines += 'Windows deployment skipped' }

@@ -53,13 +53,27 @@ spec:
               secretKeyRef:
                 name: {{ .Values.secretwindows.name }}
                 key: AZP_POOL
+          {{- if .Values.windows.dind }}
+          {{- if .Values.windows.dind.enabled }}
+          - name: ENABLE_DIND
+            value: "false"
+          {{- end }}
+          {{- end }}
+        {{- if .Values.windows.dind }}
+        {{- if .Values.windows.dind.enabled }}
         volumeMounts:
-        - mountPath: /var/run/docker.sock
-          name: docker-volume
+        - mountPath: \\.\pipe\docker_engine
+          name: docker-pipe
+        {{- end }}
+        {{- end }}
       imagePullSecrets:
         - name: regsecret
+      {{- if .Values.windows.dind }}
+      {{- if .Values.windows.dind.enabled }}
       volumes:
-      - name: docker-volume
+      - name: docker-pipe
         hostPath:
-          path: /var/run/docker.sock
+          path: \\.\pipe\docker_engine
+      {{- end }}
+      {{- end }}
 {{ end }}

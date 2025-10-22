@@ -33,6 +33,7 @@ $envDeployLinux = $env:DEPLOY_LINUX
 $envDeployWindows = $env:DEPLOY_WINDOWS
 $envAzOrg = $env:AZDO_ORG_URL
 $envLinuxImageVariant = $env:LINUX_IMAGE_VARIANT
+$envWindowsImageVariant = $env:WINDOWS_IMAGE_VARIANT
 
 # Normalize and fallback defaults
 if (-not $envInstance) { $envInstance = '003' }
@@ -73,7 +74,8 @@ if (ToBool $envDeployWindows) { $psParams.DeployWindows = $true }
 
 # Mask token for logs
 $masked = if ($envAzDo) { '***' } else { '(none)' }
-Write-Host "Invoking $scriptPath with Instance=$envInstance, AcrName=$envAcrName, AzureDevOpsOrgUrl=$envAzOrg, AzDoToken=$masked, DeployLinux=$(ToBool $envDeployLinux), DeployWindows=$(ToBool $envDeployWindows)"
+$winVariantLog = if ($envWindowsImageVariant) { $envWindowsImageVariant } else { '(default)' }
+Write-Host "Invoking $scriptPath with Instance=$envInstance, AcrName=$envAcrName, AzureDevOpsOrgUrl=$envAzOrg, AzDoToken=$masked, DeployLinux=$(ToBool $envDeployLinux), DeployWindows=$(ToBool $envDeployWindows), WindowsVariant=$winVariantLog"
 
 # Debug: surface the explicit USE_AZURE_LOCAL and KUBECONFIG values so pipeline logs show the mode selected
 Write-Host "DEBUG: USE_AZURE_LOCAL env='${env:USE_AZURE_LOCAL}' KUBECONFIG='${env:KUBECONFIG}' KUBECONFIG_AZURE_LOCAL='${env:KUBECONFIG_AZURE_LOCAL}' KUBECONTEXT_AZURE_LOCAL='${env:KUBECONTEXT_AZURE_LOCAL}'"
@@ -111,6 +113,19 @@ if ($envLinuxImageVariant) {
     }
     else {
         Write-Warning "LINUX_IMAGE_VARIANT value '$envLinuxImageVariant' is not recognized; skipping forward."
+    }
+}
+
+if ($envWindowsImageVariant) {
+    $normalizedWinVariant = $envWindowsImageVariant.Trim().ToLowerInvariant()
+    $allowedWinVariants = @('docker', 'dind')
+    if ($allowedWinVariants -contains $normalizedWinVariant) {
+        Write-Host "DEBUG: Forwarding WindowsImageVariant='$normalizedWinVariant' to deploy helper"
+        $argList += '-WindowsImageVariant'
+        $argList += $normalizedWinVariant
+    }
+    else {
+        Write-Warning "WINDOWS_IMAGE_VARIANT value '$envWindowsImageVariant' is not recognized; skipping forward."
     }
 }
 $argList += '-InstanceNumber'; $argList += $envInstance

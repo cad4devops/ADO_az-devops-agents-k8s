@@ -12,13 +12,15 @@ param(
     [Parameter(Mandatory = $false)]
     [string]$DefaultAcr,
     [Parameter(Mandatory = $false)]
-    [switch]$UsePrebaked = $true,
+    [switch]$UsePrebaked,
     [Parameter(Mandatory = $false)]
     [switch]$UseStandard,
     [Parameter(Mandatory = $false)]
     [string]$AgentVersion,
     [Parameter(Mandatory = $false)]
-    [switch]$EnableHypervFallback = $true
+    [switch]$EnableHypervFallback,
+    [Parameter(Mandatory = $false)]
+    [switch]$UseDinD
 )
 
 function Invoke-WindowsBuild {
@@ -36,13 +38,15 @@ function Invoke-WindowsBuild {
         [Parameter(Mandatory = $true)]
         [string]$DefaultAcr, #'cragents003c66i4n7btfksg'
         [Parameter(Mandatory = $false)]
-        [switch]$UsePrebaked = $true,
+    [switch]$UsePrebaked,
         [Parameter(Mandatory = $false)]
         [switch]$UseStandard,
         [Parameter(Mandatory = $false)]
         [string]$AgentVersion,
         [Parameter(Mandatory = $false)]
-        [switch]$EnableHypervFallback = $true
+    [switch]$EnableHypervFallback,
+        [Parameter(Mandatory = $false)]
+        [switch]$UseDinD
     )
 
     $ErrorActionPreference = 'Stop'
@@ -147,7 +151,16 @@ function Invoke-WindowsBuild {
     $acrShort = $ContainerRegistryName.Split('.')[0]
 
     # Determine build mode: UseStandard overrides default UsePrebaked
-    if ($UseStandard) {
+    if (-not $PSBoundParameters.ContainsKey('UsePrebaked')) { $UsePrebaked = $true }
+    if (-not $PSBoundParameters.ContainsKey('EnableHypervFallback')) { $EnableHypervFallback = $true }
+
+    if ($UseDinD) {
+        # DinD images are pre-baked by design so we keep UsePrebaked flag true and disable the standard path
+        $UsePrebaked = $true
+        $UseStandard = $false
+        Write-Host "Using WINDOWS DinD Dockerfiles (host-process capable image)" -ForegroundColor Cyan
+    }
+    elseif ($UseStandard) {
         $UsePrebaked = $false
         Write-Host "Using STANDARD agent Dockerfiles (agent downloaded at runtime)" -ForegroundColor Yellow
     }
@@ -176,18 +189,40 @@ function Invoke-WindowsBuild {
     }
 
     foreach ($windowsVersion in $WindowsVersions) {
-        $baseTag = "windows-${windowsVersion}"
+        if ($UseDinD) {
+            $repositoryName = "windows-sh-agent-${windowsVersion}-dind"
+            $baseTag = "windows-${windowsVersion}-dind"
+        }
+        else {
+            $repositoryName = "windows-sh-agent-${windowsVersion}"
+            $baseTag = "windows-${windowsVersion}"
+        }
         $finalTag = if ($TagSuffix) { "$baseTag-$TagSuffix" } else { $baseTag }
-        $repositoryName = "windows-sh-agent-${windowsVersion}"
         
         # Choose Dockerfile based on prebaked flag
-        if ($UsePrebaked) {
+        if ($UseDinD) {
+            $dockerFileName = "./Dockerfile.${repositoryName}-windows${windowsVersion}-dind"
+            if (-not (Test-Path $dockerFileName)) {
+                $fallbackDockerfile = "./Dockerfile.windows-sh-agent-${windowsVersion}-windows${windowsVersion}-dind"
+                if (Test-Path $fallbackDockerfile) {
+                    Write-Verbose "Falling back to Dockerfile naming variant: $fallbackDockerfile"
+                    $dockerFileName = $fallbackDockerfile
+                }
+            }
+            Write-Host "Building WINDOWS DinD image ${repositoryName}:${finalTag} with agent v${AgentVersion}" -ForegroundColor Cyan
+        }
+        elseif ($UsePrebaked) {
             $dockerFileName = "./Dockerfile.${repositoryName}-windows${windowsVersion}.prebaked"
             Write-Host "Building PREBAKED Windows image ${repositoryName}:${finalTag} with agent v${AgentVersion}" -ForegroundColor Cyan
         }
         else {
             $dockerFileName = "./Dockerfile.${repositoryName}-windows${windowsVersion}"
             Write-Host "Building STANDARD Windows image ${repositoryName}:${finalTag}" -ForegroundColor Cyan
+        }
+
+        if (-not (Test-Path $dockerFileName)) {
+            Write-Error "Dockerfile not found at $dockerFileName"
+            return
         }
 
         $tags = @(
@@ -287,4 +322,11 @@ function Invoke-WindowsBuild {
 } # end function
 
 # Execute the build function with the bound parameters so the script is safe when dot-sourced
-Invoke-WindowsBuild @PSBoundParameters
+$scriptParamTable = @{}
+foreach ($pair in $PSBoundParameters.GetEnumerator()) {
+    $scriptParamTable[$pair.Key] = $pair.Value
+}
+if (-not $scriptParamTable.ContainsKey('UsePrebaked')) { $scriptParamTable['UsePrebaked'] = $true }
+if (-not $scriptParamTable.ContainsKey('EnableHypervFallback')) { $scriptParamTable['EnableHypervFallback'] = $true }
+
+Invoke-WindowsBuild @scriptParamTable

@@ -1,0 +1,28 @@
+services:
+  windows:
+    image: dockurr/windows:latest
+    container_name: windows
+    environment:
+      CPU_CORES: "4"
+      RAM_SIZE: 8G
+      DISK_SIZE: 128G
+      TPM: "Y"
+      MTU: "1486"
+      DISPLAY: disabled
+      DEBUG: "Y"
+    devices:
+      - /dev/kvm
+      - /dev/net/tun
+      - /dev/vhost-net
+    cap_add:
+      - ALL
+    security_opt:
+      - seccomp=unconfined
+    ports:
+      #- 8006:8006
+      - 3389:3389/tcp
+      - 3389:3389/udp
+    volumes:
+      - ./windows:/storage
+    privileged: true
+    restart: on-failure

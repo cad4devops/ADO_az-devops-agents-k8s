@@ -70,6 +70,11 @@ linux:
 # Configuration for Windows Self-Hosted agents
 windows:
   enabled: false
+  # Docker-in-Docker (DinD) configuration for Windows. When enabled the container accesses
+  # the host Docker daemon via named pipe. Requires Docker Engine installed on Windows nodes
+  # (use Install-DockerOnWindowsNodes.ps1 before deploying).
+  dind:
+    enabled: false               # set true to mount host Docker pipe
   deploy:
     name: azsh-windows-agent
     replicas: 1

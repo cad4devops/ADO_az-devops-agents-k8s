@@ -12,6 +12,12 @@ parameters:
   - name: windowsVersion
     type: string
     default: "2022"
+  - name: windowsImageVariant
+    type: string
+    default: "dind"
+    values:
+      - "dind"
+      - "docker"
   - name: linuxImageVariant
     type: string
     default: "dind"
@@ -367,6 +373,39 @@ stages:
                     }
                     Write-Host 'Windows nodes verified and have NoSchedule taints.'
 
+              - ${{ if eq(parameters.windowsImageVariant, 'dind') }}:
+                  - task: PowerShell@2
+                    displayName: Install Docker Engine on Windows nodes (DinD requirement)
+                    env:
+                      KUBECONFIG: $(KUBECONFIG)
+                    inputs:
+                      targetType: inline
+                      pwsh: true
+                      script: |
+                        Set-StrictMode -Version Latest
+                        $ErrorActionPreference = 'Stop'
+                        if (-not $env:KUBECONFIG -or -not (Test-Path $env:KUBECONFIG)) {
+                          Write-Error "KUBECONFIG not set or not found. Cannot install Docker on nodes."; exit 1
+                        }
+                        $repoRoot = "$(System.DefaultWorkingDirectory)"
+                        $installScript = Join-Path $repoRoot 'scripts\Install-DockerOnWindowsNodes.ps1'
+                        if (-not (Test-Path $installScript)) {
+                          Write-Error "Install-DockerOnWindowsNodes.ps1 not found at $installScript"; exit 1
+                        }
+                        Write-Host "Running Install-DockerOnWindowsNodes.ps1 to ensure Docker Engine is present on Windows nodes for DinD scenario..."
+                        $instance = '${{ parameters.instanceNumber }}'
+                        $namespace = "az-devops-windows-$instance"
+                        try {
+                          & pwsh -NoProfile -NonInteractive -File $installScript -Namespace $namespace -TimeoutSeconds 600 -Verbose
+                          if ($LASTEXITCODE -ne 0) {
+                            Write-Error "Install-DockerOnWindowsNodes.ps1 failed with exit code $LASTEXITCODE"; exit 1
+                          }
+                          Write-Host "Docker Engine installation completed successfully on Windows nodes."
+                        }
+                        catch {
+                          Write-Error ("Failed to install Docker on Windows nodes: {0}" -f $_.Exception.Message); exit 1
+                        }
+
           - ${{ if eq(parameters.useAzureLocal, true) }}:
               - task: PowerShell@2
                 displayName: Create Docker regsecret in target namespaces (on-prem)
@@ -497,6 +536,7 @@ stages:
               DEPLOY_LINUX: $(DEPLOY_LINUX)
               LINUX_IMAGE_VARIANT: "${{ parameters.linuxImageVariant }}"
               DEPLOY_WINDOWS: "${{ parameters.deployWindows }}"
+              WINDOWS_IMAGE_VARIANT: "${{ parameters.windowsImageVariant }}"
               AZDO_ORG_URL: "${{ parameters.azureDevOpsOrgUrl }}"
               USE_AZURE_LOCAL: "${{ parameters.useAzureLocal }}"
               KUBECONFIG_AZURE_LOCAL: "${{ variables.kubeconfigAzureLocal }}"
@@ -604,6 +644,7 @@ stages:
                   deployWindows     = $${{ parameters.deployWindows }}
                   azureDevOpsOrgUrl = '${{ parameters.azureDevOpsOrgUrl }}'
                   windowsVersion    = '${{ parameters.windowsVersion }}'
+                  windowsImageVariant = '${{ parameters.windowsImageVariant }}'
                   linuxImageVariant = '${{ parameters.linuxImageVariant }}'
                   useAzureLocal     = $${{ parameters.useAzureLocal }}
                 } | ConvertTo-Json -Depth 5
