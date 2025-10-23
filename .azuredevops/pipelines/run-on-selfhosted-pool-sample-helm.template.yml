@@ -149,15 +149,18 @@ stages:
                     if ($azInfo.PSObject.Properties.Name -contains 'azure-cli-ml') {
                         Write-Host "azure-cli-ml extension version: $($azInfo.'azure-cli-ml')"
                     }
-              - ${{ if eq(parameters.windowsImageVariant, 'dind') }}:
+              - ${{ if and(eq(parameters.windowsImageVariant, 'dind'), eq(parameters.useAzureLocal, true)) }}:
                   - task: PowerShell@2
-                    displayName: Docker DinD smoke test (Windows)
+                    displayName: Docker DinD smoke test (Windows - AKS-HCI only)
                     inputs:
                       targetType: inline
                       pwsh: false
                       script: |
                         Set-StrictMode -Version Latest
                         $ErrorActionPreference = 'Stop'
+
+                        Write-Host "Windows DinD smoke test (AKS-HCI/Azure Local only)"
+                        Write-Host "Note: This test is skipped on standard AKS as Windows DinD is not supported there."
 
                         $dockerCmd = Get-Command docker -ErrorAction SilentlyContinue
                         if (-not $dockerCmd) {
