@@ -22,7 +22,7 @@ parameters:
     default: false # Set to true to use on-premises agents, false to use cloud agents
   - name: useAzureLocal
     type: boolean
-    default: false # When false (standard AKS), Windows DinD is not supported and will be forced to 'docker'
+    default: false # Windows DinD works on both standard AKS and AKS-HCI (requires Docker Engine installation)
   - name: ubuntuOnPremPoolName
     type: string
     default: "UbuntuLatestPoolOnPrem"
