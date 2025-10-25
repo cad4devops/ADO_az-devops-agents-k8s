@@ -20,24 +20,25 @@ Run scalable, secure, cost‑efficient Azure DevOps (ADO) self‑hosted agents o
 ## Table of Contents
 
 1. [Why Kubernetes for ADO Agents?](#why-kubernetes)
-2. [Architecture Overview](#architecture)
-3. [Repository Structure](#repository-structure)
-3.1 [Bootstrap & Build Orchestrator](#bootstrap-and-build)
-4. [Images & Variants](#images--variants)
-5. [Helm Chart](#helm-chart)
-6. [Configuration (values.yaml)](#configuration)
-7. [Secrets Management](#secrets)
-8. [KEDA Autoscaling](#keda-autoscaling)
-9. [Deployment Quick Start](#quick-start)
-10. [Advanced Deployment Scenarios](#advanced)
-11. [Security Considerations](#security)
-12. [Troubleshooting](#troubleshooting)
-13. [Roadmap](#roadmap)
-14. [Contributing](#contributing)
-15. [Maintainers](#maintainers)
-16. [Contact](#contact)
-17. [Weekly Pipeline](#weekly-pipeline)
-18. [Azure DevOps Pipelines](#azure-devops-pipelines)
+2. [Docker-in-Docker (DinD) Support](#dind-support)
+3. [Architecture Overview](#architecture)
+4. [Repository Structure](#repository-structure)
+5. [Bootstrap & Build Orchestrator](#bootstrap-and-build)
+6. [Images & Variants](#images--variants)
+7. [Helm Chart](#helm-chart)
+8. [Configuration (values.yaml)](#configuration)
+9. [Secrets Management](#secrets)
+10. [KEDA Autoscaling](#keda-autoscaling)
+11. [Deployment Quick Start](#quick-start)
+12. [Advanced Deployment Scenarios](#advanced)
+13. [Security Considerations](#security)
+14. [Troubleshooting](#troubleshooting)
+15. [Roadmap](#roadmap)
+16. [Contributing](#contributing)
+17. [Maintainers](#maintainers)
+18. [Contact](#contact)
+19. [Weekly Pipeline](#weekly-pipeline)
+20. [Azure DevOps Pipelines](#azure-devops-pipelines)
 
 - - -
 
@@ -56,6 +57,47 @@ Kubernetes + containers give you:
 * Unified management (Helm + GitOps).
 * Support for mixed OS pools (Windows + Linux).
 * Customization: Add tooling in Dockerfiles per workload (e.g., Node, .NET, Java, Docker CLI, etc.).
+
+- - -
+
+## Docker-in-Docker (DinD) Support <a id="dind-support"></a>
+
+✅ **Both Linux and Windows Docker-in-Docker are fully functional on Azure AKS and AKS-HCI (Azure Local)**
+
+### Platform Support Matrix
+
+| Platform | Linux DinD | Windows DinD | Installation Method |
+|----------|-----------|--------------|---------------------|
+| **Azure AKS** | ✅ Built-in | ✅ Manual | Automatic / Manual Docker install |
+| **AKS-HCI (Azure Local)** | ✅ Built-in | ✅ Manual | Automatic / Manual Docker install |
+
+### Linux DinD
+
+* **Built-in support** via the `linux-sh-agent-dind` image variant
+* No additional installation required
+* Works out-of-the-box on both Azure AKS and AKS-HCI
+* Uses in-pod Docker daemon for isolated build contexts
+
+### Windows DinD
+
+* Requires **manual Docker Engine installation** on Windows nodes
+* Same installation process works on both Azure AKS and AKS-HCI
+* Docker 28.0.2 coexists with containerd (Kubernetes container runtime)
+* Named pipe `\\.\pipe\docker_engine` enables DinD mounting
+
+**Installation Guides:**
+
+* **Azure AKS**: See `docs/WINDOWS-DIND-AZURE-AKS-MANUAL-INSTALLATION.md`
+* **AKS-HCI**: See `docs/WINDOWS-DIND-WORKING-SOLUTION.md`
+* **Technical Details**: See `docs/WINDOWS-DIND-IMPLEMENTATION.md`
+* **Kubernetes Manifests**: See `docs/WINDOWS-DIND-YAML-MANIFESTS.md`
+
+**Key Points:**
+
+* Windows DinD requires Docker Engine manually installed via hostProcess pods
+* Both platforms use containerd as the Kubernetes runtime (Docker is for DinD workloads only)
+* No platform restrictions—Windows DinD works identically on Azure AKS and AKS-HCI
+* Installation is a one-time setup per Windows node
 
 - - -
 

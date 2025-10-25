@@ -379,13 +379,6 @@ stages:
                 Write-Host "##vso[task.setvariable variable=poolName]$poolName"
                 $variant = [string]$cfg.windowsImageVariant
                 if ([string]::IsNullOrWhiteSpace($variant)) { $variant = 'docker' }
-                
-                # ARCHITECTURE RULE: Windows DinD only supported on AKS-HCI
-                if (-not $useLocalVal -and $variant -eq 'dind') {
-                  Write-Warning "Architecture rule: Windows DinD not supported on standard AKS. Forcing variant to 'docker'."
-                  $variant = 'docker'
-                }
-                
                 Write-Host "##vso[task.setvariable variable=windowsImageVariant]$variant"
                 $winVersion = [string]$cfg.windowsVersion
                 if ([string]::IsNullOrWhiteSpace($winVersion)) { $winVersion = '2022' }

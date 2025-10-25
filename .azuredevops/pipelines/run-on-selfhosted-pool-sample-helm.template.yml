@@ -22,7 +22,7 @@ parameters:
     default: 180
   - name: useAzureLocal
     type: boolean
-    default: false
+    default: __USE_AZURE_LOCAL__
   - name: windowsImageVariant
     type: string
     default: "docker"
@@ -149,9 +149,9 @@ stages:
                     if ($azInfo.PSObject.Properties.Name -contains 'azure-cli-ml') {
                         Write-Host "azure-cli-ml extension version: $($azInfo.'azure-cli-ml')"
                     }
-              - ${{ if and(eq(parameters.windowsImageVariant, 'dind'), eq(parameters.useAzureLocal, true)) }}:
+              - ${{ if eq(parameters.windowsImageVariant, 'dind') }}:
                   - task: PowerShell@2
-                    displayName: Docker DinD smoke test (Windows - AKS-HCI only)
+                    displayName: Docker DinD smoke test (Windows)
                     inputs:
                       targetType: inline
                       pwsh: false
@@ -159,8 +159,8 @@ stages:
                         Set-StrictMode -Version Latest
                         $ErrorActionPreference = 'Stop'
 
-                        Write-Host "Windows DinD smoke test (AKS-HCI/Azure Local only)"
-                        Write-Host "Note: This test is skipped on standard AKS as Windows DinD is not supported there."
+                        Write-Host "Windows DinD smoke test"
+                        Write-Host "Note: Requires Docker Engine installed on Windows nodes (works on both AKS and AKS-HCI with containerd)"
 
                         $dockerCmd = Get-Command docker -ErrorAction SilentlyContinue
                         if (-not $dockerCmd) {
@@ -173,7 +173,7 @@ stages:
                         if (-not (Test-Path $pipePath)) {
                             Write-Error "Docker engine pipe '$pipePath' not found. This Windows DinD agent should have the host Docker pipe mounted."
                             Write-Host "Troubleshooting info:"
-                            Write-Host "- Ensure Docker Engine is installed on the Windows host node"
+                            Write-Host "- Ensure Docker Engine is installed on the Windows host node (use Install-DockerOnWindowsNodes.ps1)"
                             Write-Host "- Verify Helm values have windows.dind.enabled: true"
                             Write-Host "- Check volume mount in deployment: kubectl get deployment -n <namespace> -o yaml | Select-String docker"
                             throw "Docker engine pipe not available. Cannot proceed with DinD smoke test."

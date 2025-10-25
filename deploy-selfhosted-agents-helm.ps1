@@ -72,15 +72,6 @@ function Write-Green([string]$msg) {
 $deployLinuxEnabled = [bool]$DeployLinux
 $deployWindowsEnabled = [bool]$DeployWindows
 
-# ARCHITECTURE RULE: Windows DinD only supported on AKS-HCI, not standard AKS
-# If deploying to standard AKS (UseAzureLocal = false) and WindowsImageVariant is 'dind', force it to 'docker'
-if (-not $UseAzureLocal.IsPresent -and $WindowsImageVariant -eq 'dind') {
-    Write-Warning "Windows DinD is not supported on standard AKS (only on AKS-HCI)."
-    Write-Warning "Standard AKS Windows nodes use containerd and cannot run Docker Engine."
-    Write-Warning "Forcing WindowsImageVariant from 'dind' to 'docker'."
-    $WindowsImageVariant = 'docker'
-}
-
 # If running in Azure-local/on-prem mode, require the caller to supply local kubeconfig and context
 # and an explicit bootstrap pool name so downstream operations have the information they need.
 if ($UseAzureLocal.IsPresent) {

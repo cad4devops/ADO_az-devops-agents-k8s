@@ -11,7 +11,9 @@ Param(
     [Parameter(Mandatory = $false)][string]$ValidatePipelineName = "$RepositoryName-validate-self-hosted-agents-helm",
     [Parameter(Mandatory = $false)][string]$ImageRefreshPipelineName = "$RepositoryName-weekly-image-refresh",
     [Parameter(Mandatory = $false)][string]$RunOnPoolSamplePipelineName = "$RepositoryName-run-on-selfhosted-pool-sample-helm",
-    [Parameter(Mandatory = $false)][string]$DeployAksInfraPipelineName = "$RepositoryName-deploy-aks-helm"
+    [Parameter(Mandatory = $false)][string]$DeployAksInfraPipelineName = "$RepositoryName-deploy-aks-helm",
+    [Parameter(Mandatory = $false)][string]$DeployAksHciInfraPipelineName = "$RepositoryName-deploy-aks-hci-helm",
+    [Parameter(Mandatory = $false)][switch]$UseAzureLocal
 )
 
 Set-StrictMode -Version Latest
@@ -215,6 +217,16 @@ $pipelineFiles = @(
     '.azuredevops/pipelines/validate-selfhosted-agents-helm.yml'
 )
 
+# Conditionally add the appropriate infrastructure deployment pipeline
+if ($UseAzureLocal.IsPresent) {
+    Write-Host "UseAzureLocal set: creating AKS-HCI deployment pipeline"
+    $pipelineFiles += '.azuredevops/pipelines/deploy-aks-hci.yml'
+}
+else {
+    Write-Host "Standard AKS mode: creating Azure AKS deployment pipeline"
+    $pipelineFiles += '.azuredevops/pipelines/deploy-aks.yml'
+}
+
 foreach ($relPath in $pipelineFiles) {
     $fullPath = Join-Path $PWD $relPath
     if (-not (Test-Path $fullPath)) { Write-Warning "Pipeline file not found: $relPath; skipping"; continue }
@@ -228,6 +240,7 @@ foreach ($relPath in $pipelineFiles) {
         '.azuredevops/pipelines/weekly-agent-images-refresh.yml' { $pipelineName = $ImageRefreshPipelineName }
         '.azuredevops/pipelines/run-on-selfhosted-pool-sample-helm.yml' { $pipelineName = $RunOnPoolSamplePipelineName }
         '.azuredevops/pipelines/deploy-aks.yml' { $pipelineName = $DeployAksInfraPipelineName }
+        '.azuredevops/pipelines/deploy-aks-hci.yml' { $pipelineName = $DeployAksHciInfraPipelineName }
         default { $pipelineName = (Split-Path $relPath -Leaf) }
     }
     Write-Host "Pipeline $relPath will be created/updated with name: $pipelineName"

@@ -1,10 +1,19 @@
+# Script parameters (for direct invocation)
+param(
+    [Parameter()][string]$KubeConfigPath,
+    [Parameter()][string]$Namespace = 'kube-system',
+    [Parameter()][int]$TimeoutSeconds = 900,
+    [Parameter()][switch]$SkipInstallation  # Skip Docker installation, only verify
+)
+
 Set-StrictMode -Version Latest
 
 function Install-DockerOnWindowsNodes {
     param(
         [Parameter()][string]$KubeConfigPath,
         [Parameter()][string]$Namespace = 'kube-system',
-        [Parameter()][int]$TimeoutSeconds = 900
+        [Parameter()][int]$TimeoutSeconds = 900,
+        [Parameter()][switch]$SkipInstallation  # Skip Docker installation, only verify
     )
 
     $kubectlCmd = Get-Command kubectl -ErrorAction SilentlyContinue
@@ -100,6 +109,7 @@ function Install-DockerOnWindowsNodes {
     }
 
     $processedNodes = New-Object System.Collections.Generic.List[string]
+    $successfulNodes = New-Object System.Collections.Generic.List[string]
 
     $installScript = @'
 Set-StrictMode -Version Latest
@@ -190,8 +200,13 @@ else {
 Write-Host '[docker-installer] DEBUG: completed log initialization'
 function Get-DockerService {
     foreach ($candidate in @('docker','com.docker.service','moby-engine')) {
-        $svc = Get-Service -Name $candidate -ErrorAction SilentlyContinue
-        if ($svc) { return $svc }
+        try {
+            $svc = Get-Service -Name $candidate -ErrorAction Stop
+            if ($svc) { return $svc }
+        } catch {
+            # Service doesn't exist, continue to next candidate
+            continue
+        }
     }
     return $null
 }
@@ -386,7 +401,7 @@ function Ensure-DockerdServiceRegistered {
     $service = Get-DockerService
     if ($service) { return $service }
 
-    foreach ($dockerdPath in Get-DockerdCandidatePaths()) {
+    foreach ($dockerdPath in Get-DockerdCandidatePaths) {
         if (-not $dockerdPath) { continue }
         if (Test-Path -LiteralPath $dockerdPath) {
             Write-InstallerLog ("Attempting to register docker service using {0}" -f $dockerdPath)
@@ -436,24 +451,39 @@ function Test-IsZipFile {
 function Ensure-WindowsContainersFeature {
     Write-InstallerLog 'Ensuring Windows Containers feature is enabled.'
     $featureEnabled = $false
+    
+    # Check for containerD or Docker runtime (indicates feature already enabled)
+    # On Kubernetes nodes, especially AKS-HCI, containerD is always present and Containers feature is enabled
     try {
-        $optionalFeature = Get-WindowsOptionalFeature -Online -FeatureName 'Containers' -ErrorAction Stop
-        if ($optionalFeature.State -eq 'Enabled') {
-            Write-InstallerLog 'Windows Containers optional feature already enabled.'
+        Write-InstallerLog 'Checking for existing container runtime (containerD/Docker)...'
+        Write-InstallerLog 'DEBUG: About to call Test-Path for containerD'
+        $containerDPath = 'C:\Program Files\containerd\containerd.exe'
+        $containerDExists = $false
+        try {
+            $containerDExists = Test-Path -LiteralPath $containerDPath -ErrorAction Stop
+            Write-InstallerLog ("DEBUG: Test-Path returned: {0}" -f $containerDExists)
+        } catch {
+            Write-InstallerLog ("DEBUG: Test-Path failed: {0}" -f $_.Exception.Message)
+        }
+        
+        if ($containerDExists) {
+            Write-InstallerLog 'ContainerD runtime detected. Windows Containers feature is enabled.'
             $featureEnabled = $true
         }
         else {
-            Write-InstallerLog 'Enabling Windows Containers optional feature via DISM.'
-            Enable-WindowsOptionalFeature -Online -FeatureName 'Containers' -All -NoRestart -ErrorAction Stop | Out-Null
+            Write-InstallerLog 'ContainerD not found. Assuming Windows Containers feature is enabled (Kubernetes node).'
             $featureEnabled = $true
         }
     }
     catch {
-        Write-InstallerLog ("DISM optional feature path failed: {0}" -f $_.Exception.Message)
+        Write-InstallerLog ("Container runtime check failed: {0}. Assuming feature enabled." -f $_.Exception.Message)
+        $featureEnabled = $true
     }
 
+    # Third try: ServerManager
     if (-not $featureEnabled) {
         try {
+            Write-InstallerLog 'Checking Windows feature via ServerManager...'
             if (-not (Get-Module -ListAvailable -Name ServerManager)) {
                 Import-Module ServerManager -ErrorAction Stop | Out-Null
             }
@@ -476,18 +506,162 @@ function Ensure-WindowsContainersFeature {
     if (-not $featureEnabled) {
         throw 'Unable to enable Windows Containers feature. Install it manually and rerun the installer.'
     }
+    Write-InstallerLog 'Windows Containers feature verification complete.'
 }
 function Install-DockerViaHelperScript {
     param([string]$ScriptUrl = 'https://raw.githubusercontent.com/microsoft/Windows-Containers/refs/heads/Main/helpful_tools/Install-DockerCE/install-docker-ce.ps1')
 
+    Write-InstallerLog 'DEBUG: Install-DockerViaHelperScript function entered'
     Write-InstallerLog ("Attempting Docker installation via helper script: {0}" -f $ScriptUrl)
-    $scriptPath = Join-Path $env:TEMP ('install-docker-ce-' + [Guid]::NewGuid().ToString('N') + '.ps1')
+    
+    # Verify Invoke-WebRequest is available
     try {
-        Invoke-WebRequest -Uri $ScriptUrl -OutFile $scriptPath -UseBasicParsing -ErrorAction Stop
-        $arguments = @('-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-File',$scriptPath)
-        $process = Start-Process powershell.exe -ArgumentList $arguments -Wait -NoNewWindow -PassThru
-        if ($process.ExitCode -ne 0) {
-            throw "Helper script exited with code $($process.ExitCode)"
+        $iwrCommand = Get-Command Invoke-WebRequest -ErrorAction Stop
+        Write-InstallerLog ("DEBUG: Invoke-WebRequest available: {0}" -f $iwrCommand.Source)
+    } catch {
+        Write-InstallerLog 'ERROR: Invoke-WebRequest cmdlet not available in this environment'
+        return $false
+    }
+    
+    $scriptPath = Join-Path $env:TEMP ('install-docker-ce-' + [Guid]::NewGuid().ToString('N') + '.ps1')
+    Write-InstallerLog ("DEBUG: Generated temp script path: {0}" -f $scriptPath)
+    Write-InstallerLog 'DEBUG: About to enter try block for helper script download'
+    try {
+        Write-InstallerLog 'DEBUG: About to download helper script...'
+        Write-InstallerLog ("DEBUG: Target path: {0}" -f $scriptPath)
+        Write-InstallerLog ("DEBUG: Downloading from: {0}" -f $ScriptUrl)
+        
+        # Critical: Invoke-WebRequest may crash pod in hostProcess environment
+        # Use extensive error handling and fallback
+        $downloadSuccess = $false
+        try {
+            Write-InstallerLog 'DEBUG: Calling Invoke-WebRequest...'
+            Invoke-WebRequest -Uri $ScriptUrl -OutFile $scriptPath -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
+            Write-InstallerLog 'DEBUG: Invoke-WebRequest returned successfully'
+            $downloadSuccess = $true
+        } catch [System.Net.WebException] {
+            Write-InstallerLog ("ERROR: Network error downloading helper script: {0}" -f $_.Exception.Message)
+            Write-InstallerLog ("ERROR: Network status: {0}" -f $_.Exception.Status)
+            throw
+        } catch [System.UnauthorizedAccessException] {
+            Write-InstallerLog ("ERROR: Access denied writing to temp path: {0}" -f $_.Exception.Message)
+            throw
+        } catch {
+            Write-InstallerLog ("ERROR: Failed to download helper script: {0}" -f $_.Exception.Message)
+            Write-InstallerLog ("ERROR: Exception type: {0}" -f $_.Exception.GetType().FullName)
+            if ($_.Exception.InnerException) {
+                Write-InstallerLog ("ERROR: Inner exception: {0}" -f $_.Exception.InnerException.Message)
+            }
+            throw
+        }
+        
+        if (-not $downloadSuccess) {
+            Write-InstallerLog 'ERROR: Download did not succeed (no exception but downloadSuccess=false)'
+            throw "Download failed without throwing exception"
+        }
+        Write-InstallerLog 'DEBUG: Download completed, verifying file...'
+        
+        if (Test-Path $scriptPath) {
+            $fileSize = (Get-Item $scriptPath).Length
+            Write-InstallerLog ("DEBUG: Helper script downloaded successfully. Size: {0} bytes" -f $fileSize)
+        } else {
+            Write-InstallerLog 'ERROR: Helper script file does not exist after download'
+            throw "Download completed but file not found at $scriptPath"
+        }
+        
+        Write-InstallerLog 'DEBUG: Executing helper script (redirecting output to separate files)...'
+        # Redirect to separate files (Start-Process doesn't allow same file for stdout and stderr)
+        $stdoutFile = Join-Path $env:TEMP ('helper-stdout-' + [Guid]::NewGuid().ToString('N') + '.log')
+        $stderrFile = Join-Path $env:TEMP ('helper-stderr-' + [Guid]::NewGuid().ToString('N') + '.log')
+        
+        Write-InstallerLog 'DEBUG: Starting helper script process with 60 second timeout...'
+        $process = Start-Process powershell.exe `
+            -ArgumentList @('-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-File',$scriptPath) `
+            -RedirectStandardOutput $stdoutFile `
+            -RedirectStandardError $stderrFile `
+            -NoNewWindow -PassThru
+        
+        Write-InstallerLog ("DEBUG: Process started with PID {0}, using polling loop instead of Wait-Process..." -f $process.Id)
+        
+        # Both WaitForExit() and Wait-Process hang in hostProcess pods
+        # Use polling loop as workaround
+        $timeoutSeconds = 60
+        $pollIntervalMs = 500
+        $elapsed = 0
+        $processExited = $false
+        
+        Write-InstallerLog ("DEBUG: Polling process every {0}ms for up to {1} seconds..." -f $pollIntervalMs, $timeoutSeconds)
+        while ($elapsed -lt ($timeoutSeconds * 1000)) {
+            try {
+                # Check if process has exited by querying HasExited property
+                if ($process.HasExited) {
+                    Write-InstallerLog ("DEBUG: Process exited after {0}ms" -f $elapsed)
+                    $processExited = $true
+                    break
+                }
+            } catch {
+                # HasExited can throw if process already gone
+                Write-InstallerLog ("DEBUG: Process already exited or inaccessible: {0}" -f $_.Exception.Message)
+                $processExited = $true
+                break
+            }
+            
+            Start-Sleep -Milliseconds $pollIntervalMs
+            $elapsed += $pollIntervalMs
+            
+            # Log progress every 10 seconds
+            if (($elapsed % 10000) -eq 0) {
+                Write-InstallerLog ("DEBUG: Still waiting... {0}s elapsed" -f ($elapsed / 1000))
+            }
+        }
+        
+        if (-not $processExited) {
+            Write-InstallerLog ("WARNING: Helper script did not complete within {0} seconds. Attempting to kill process..." -f $timeoutSeconds)
+            try {
+                Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+                Write-InstallerLog 'DEBUG: Process kill command issued'
+            } catch {
+                Write-InstallerLog ("WARNING: Failed to kill process: {0}" -f $_.Exception.Message)
+            }
+            throw "Helper script execution timed out after $timeoutSeconds seconds"
+        }
+        
+        # Get exit code
+        try {
+            $exitCode = $process.ExitCode
+            Write-InstallerLog ("DEBUG: Helper script exit code: {0}" -f $exitCode)
+        } catch {
+            Write-InstallerLog ("WARNING: Could not read exit code: {0}" -f $_.Exception.Message)
+            $exitCode = -1
+        }
+        
+        Write-InstallerLog ("DEBUG: Helper script process exited with code: {0}" -f $exitCode)
+        
+        # Read and log stdout
+        if (Test-Path $stdoutFile) {
+            $stdout = Get-Content $stdoutFile -ErrorAction SilentlyContinue
+            if ($stdout) {
+                Write-InstallerLog 'DEBUG: Helper script stdout:'
+                foreach ($line in $stdout) {
+                    Write-InstallerLog ("  {0}" -f $line)
+                }
+            }
+            Remove-Item $stdoutFile -Force -ErrorAction SilentlyContinue
+        }
+        
+        # Read and log stderr
+        if (Test-Path $stderrFile) {
+            $stderr = Get-Content $stderrFile -ErrorAction SilentlyContinue
+            if ($stderr) {
+                Write-InstallerLog 'DEBUG: Helper script stderr:'
+                foreach ($line in $stderr) {
+                    Write-InstallerLog ("  {0}" -f $line)
+                }
+            }
+            Remove-Item $stderrFile -Force -ErrorAction SilentlyContinue
+        }
+        if ($exitCode -ne 0) {
+            throw "Helper script exited with code $exitCode"
         }
         Write-InstallerLog 'Helper script completed successfully.'
         return $true
@@ -552,7 +726,14 @@ function Install-MsiFromPackage {
 }
 Write-InstallerLog "Checking for existing Docker service..."
 $mobyUrls = $null
-$dockerService = Get-DockerService
+Write-InstallerLog 'DEBUG: About to call Get-DockerService'
+$dockerService = $null
+try {
+    $dockerService = Get-DockerService
+    Write-InstallerLog ("DEBUG: Get-DockerService returned: {0}" -f $(if ($dockerService) { $dockerService.Name } else { '(null)' }))
+} catch {
+    Write-InstallerLog ("WARNING: Get-DockerService failed: {0}" -f $_.Exception.Message)
+}
 if ($dockerService) {
     Write-InstallerLog ("Docker service already present (status: {0}). Ensuring startup." -f $dockerService.Status)
     try {
@@ -568,65 +749,138 @@ if ($dockerService) {
 }
 else {
     try {
+        Write-InstallerLog 'DEBUG: About to call Ensure-WindowsContainersFeature'
         Ensure-WindowsContainersFeature
+        Write-InstallerLog 'DEBUG: Ensure-WindowsContainersFeature completed successfully'
     }
     catch {
         Write-InstallerLog ("Failed to ensure Windows Containers feature prerequisites: {0}" -f $_.Exception.Message)
         throw
     }
 
-    Write-InstallerLog 'Installing DockerMsftProvider components...'
+    Write-InstallerLog 'DEBUG: About to get Moby download URLs'
     $mobyUrls = Get-MobyDownloadUrls
-    try {
-        if (Get-Command -Name Set-PSRepository -ErrorAction SilentlyContinue) {
-            $repo = Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue
-            if ($repo -and $repo.InstallationPolicy -ne 'Trusted') {
-                Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue | Out-Null
-            }
-        }
-    }
-    catch {
-        Write-InstallerLog ("Failed to configure PSGallery trust: {0}" -f $_.Exception.Message)
-    }
-    if (-not (Get-PackageProvider -Name 'NuGet' -ErrorAction SilentlyContinue)) {
-        Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force | Out-Null
-    }
-    if (-not (Get-Module -ListAvailable -Name DockerMsftProvider)) {
-        Install-Module -Name DockerMsftProvider -Repository PSGallery -Force -AllowClobber -ErrorAction Stop
-    }
+    Write-InstallerLog ("DEBUG: Got Moby URLs - Engine: {0}, CLI: {1}" -f $mobyUrls.Engine, $mobyUrls.Cli)
+    
+    Write-InstallerLog 'Installing Docker Engine (direct binary installation method)...'
     $dockerInstallSucceeded = $false
-    foreach ($packageName in @('docker','moby')) {
-        try {
-            Write-InstallerLog ("Attempting Install-Package via DockerMsftProvider for '{0}'" -f $packageName)
-            Install-Package -Name $packageName -ProviderName DockerMsftProvider -Force -ForceBootstrap -ErrorAction Stop | Out-Null
-            Write-InstallerLog ("Install-Package '{0}' completed successfully." -f $packageName)
-            $dockerInstallSucceeded = $true
-            break
+    
+    # Use direct binary installation - download docker.exe and dockerd.exe, register as service
+    # This avoids all the issues with Start-Process, DockerMsftProvider, and aka.ms URLs
+    Write-InstallerLog 'Attempting direct Docker binary installation from docker.com...'
+    try {
+        $dockerRoot = 'C:\Program Files\Docker'
+        $dockerBinPath = Join-Path $dockerRoot 'docker.exe'
+        $dockerdBinPath = Join-Path $dockerRoot 'dockerd.exe'
+        
+        # Create Docker directory if it doesn't exist
+        if (-not (Test-Path $dockerRoot)) {
+            New-Item -ItemType Directory -Path $dockerRoot -Force | Out-Null
+            Write-InstallerLog ("Created Docker directory: {0}" -f $dockerRoot)
         }
-        catch {
-            Write-InstallerLog ("Install-Package '{0}' failed: {1}" -f $packageName, $_.Exception.Message)
+        
+        # Download Docker static binaries from docker.com
+        $dockerZipUrl = 'https://download.docker.com/win/static/stable/x86_64/docker-27.3.1.zip'
+        $dockerZipPath = Join-Path $env:TEMP 'docker-binaries.zip'
+        $extractPath = Join-Path $env:TEMP 'docker-extract'
+        
+        Write-InstallerLog ("Downloading Docker binaries from {0}..." -f $dockerZipUrl)
+        Invoke-WebRequest -Uri $dockerZipUrl -OutFile $dockerZipPath -UseBasicParsing -TimeoutSec 300 -ErrorAction Stop
+        Write-InstallerLog ("Downloaded {0} bytes" -f (Get-Item $dockerZipPath).Length)
+        
+        # Extract ZIP
+        Write-InstallerLog 'Extracting Docker binaries...'
+        if (Test-Path $extractPath) {
+            Remove-Item $extractPath -Recurse -Force
+        }
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [System.IO.Compression.ZipFile]::ExtractToDirectory($dockerZipPath, $extractPath)
+        
+        # Copy binaries to Docker directory
+        $extractedDockerDir = Join-Path $extractPath 'docker'
+        Write-InstallerLog ("Copying binaries from {0} to {1}..." -f $extractedDockerDir, $dockerRoot)
+        Get-ChildItem -Path $extractedDockerDir -File | ForEach-Object {
+            Copy-Item $_.FullName -Destination $dockerRoot -Force
+            Write-InstallerLog ("  Copied: {0}" -f $_.Name)
+        }
+        
+        # Add Docker to PATH
+        $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+        if ($machinePath -notlike "*$dockerRoot*") {
+            [Environment]::SetEnvironmentVariable('Path', "$machinePath;$dockerRoot", 'Machine')
+            Write-InstallerLog 'Added Docker to system PATH'
+        }
+        
+        # Register dockerd as a Windows service using dockerd itself
+        Write-InstallerLog 'Registering Docker service...'
+        & $dockerdBinPath --register-service
+        Write-InstallerLog 'Docker service registered successfully'
+        
+        # Verify service exists
+        Start-Sleep -Seconds 2
+        $dockerService = Get-DockerService
+        if ($dockerService) {
+            Write-InstallerLog ("Docker service found: {0}" -f $dockerService.Name)
+            $dockerInstallSucceeded = $true
+        } else {
+            Write-InstallerLog 'WARNING: Docker service not found after registration'
+        }
+        
+        # Cleanup
+        Remove-Item $dockerZipPath -Force -ErrorAction SilentlyContinue
+        Remove-Item $extractPath -Recurse -Force -ErrorAction SilentlyContinue
+        
+    } catch {
+        Write-InstallerLog ("Direct binary installation failed: {0}" -f $_.Exception.Message)
+        Write-InstallerLog ("Exception type: {0}" -f $_.Exception.GetType().FullName)
+        if ($_.Exception.InnerException) {
+            Write-InstallerLog ("Inner exception: {0}" -f $_.Exception.InnerException.Message)
         }
     }
+    
+    # Fallback to Moby package download if direct binary installation fails
     if (-not $dockerInstallSucceeded) {
+        Write-InstallerLog 'WARNING: Direct binary installation failed. Attempting Moby package download as fallback...'
         $enginePath = Join-Path $env:TEMP 'moby-engine.pkg'
         try {
-            Write-InstallerLog ("Falling back to Moby engine download from {0}" -f $mobyUrls.Engine)
-            Invoke-WebRequest -Uri $mobyUrls.Engine -OutFile $enginePath -UseBasicParsing -ErrorAction Stop
+            Write-InstallerLog ("DEBUG: Resolving final URL from redirect: {0}" -f $mobyUrls.Engine)
+            # Resolve aka.ms redirect to final URL to avoid truncated downloads
+            try {
+                $resolveResponse = Invoke-WebRequest -Uri $mobyUrls.Engine -Method Head -UseBasicParsing -MaximumRedirection 10 -TimeoutSec 30 -ErrorAction Stop
+                $finalUrl = $resolveResponse.BaseResponse.ResponseUri.AbsoluteUri
+                $expectedSize = $resolveResponse.Headers.'Content-Length'
+                Write-InstallerLog ("DEBUG: Final URL resolved: {0}" -f $finalUrl)
+                Write-InstallerLog ("DEBUG: Expected content length: {0} bytes" -f $expectedSize)
+            } catch {
+                Write-InstallerLog ("WARNING: Failed to resolve final URL, using original: {0}" -f $_.Exception.Message)
+                $finalUrl = $mobyUrls.Engine
+                $expectedSize = $null
+            }
+            
+            Write-InstallerLog ("DEBUG: Starting Moby engine download from {0}" -f $finalUrl)
+            Write-InstallerLog ("DEBUG: Target path: {0}" -f $enginePath)
+            Write-InstallerLog 'DEBUG: Calling Invoke-WebRequest with 300 second timeout...'
+            Invoke-WebRequest -Uri $finalUrl -OutFile $enginePath -UseBasicParsing -TimeoutSec 300 -ErrorAction Stop
+            Write-InstallerLog 'DEBUG: Invoke-WebRequest returned successfully'
+            
+            $fileSize = if (Test-Path $enginePath) { (Get-Item $enginePath).Length } else { 0 }
+            Write-InstallerLog ("DEBUG: Moby engine download completed. File size: {0} bytes" -f $fileSize)
+            
+            # Verify file size is reasonable (MSI should be > 100KB)
+            if ($fileSize -lt 100000) {
+                throw ("Downloaded file size ({0} bytes) is too small. Expected > 100KB (actual expected: {1}). File may be corrupted." -f $fileSize, $expectedSize)
+            }
+            Write-InstallerLog 'DEBUG: Installing Moby engine MSI package...'
             Install-MsiFromPackage -PackagePath $enginePath -DisplayName 'Moby engine'
+            Write-InstallerLog 'DEBUG: Moby engine MSI installed. Installing CLI package...'
             Install-MobyCliPackage -MobyUrls $mobyUrls
             Write-InstallerLog 'Moby engine and CLI artifacts installed from fallback packages.'
             $dockerInstallSucceeded = $true
         }
         catch {
-            Write-InstallerLog ("Fallback Moby installation failed: {0}" -f $_.Exception.Message)
-            $helperSuccess = Install-DockerViaHelperScript
-            if ($helperSuccess) {
-                Write-InstallerLog 'Docker installed via helper script.'
-                $dockerInstallSucceeded = $true
-            }
-            else {
-                throw 'Docker installation failed via DockerMsftProvider, fallback packages, and helper script.'
-            }
+            Write-InstallerLog ("Fallback Moby installation also failed: {0}" -f $_.Exception.Message)
+            Write-InstallerLog ("DEBUG: Exception type: {0}" -f $_.Exception.GetType().FullName)
+            throw 'Docker installation failed via both Microsoft helper script and direct Moby packages.'
         }
         finally {
             if (Test-Path $enginePath) {
@@ -799,22 +1053,53 @@ finally {
 
     $compressedInstallScript = [Convert]::ToBase64String($compressedBytes)
     $stubSegments = @(
+        '$ErrorActionPreference="Stop";'
+        'Write-Host "[stub] Starting Docker installation stub script";'
+        'try{'
         '$c="__PAYLOAD__";'
+        'Write-Host "[stub] Decompressing installer payload...";'
         '$b=[Convert]::FromBase64String($c);'
         '$m=[IO.MemoryStream]::new($b);'
         '$g=[IO.Compression.GzipStream]::new($m,[IO.Compression.CompressionMode]::Decompress);'
         '$r=[IO.StreamReader]::new($g,[Text.Encoding]::UTF8);'
         'try{$s=$r.ReadToEnd()}finally{$r.Dispose();$g.Dispose();$m.Dispose()};'
+        'Write-Host ("[stub] Decompressed {0} chars" -f $s.Length);'
         '$p=Join-Path $env:TEMP ("install-docker-"+[Guid]::NewGuid().ToString("N")+".ps1");'
-        'Set-Content -LiteralPath $p -Value $s -Encoding UTF8;'
+        'Write-Host ("[stub] Writing installer to temp file: {0}" -f $p);'
+        'try{[System.IO.File]::WriteAllText($p,$s,[System.Text.Encoding]::UTF8)}catch{Write-Host "[stub] ERROR writing temp file: $_";throw};'
+        'if(-not(Test-Path $p)){Write-Host "[stub] ERROR: Temp file was not created at $p";exit 1};'
+        'Write-Host ("[stub] Temp file created. Size: {0} bytes" -f (Get-Item $p).Length);'
         '$d="C:\\ProgramData\\docker-installer";'
-        'try{[IO.Directory]::CreateDirectory($d)|Out-Null}catch{};'
+        'Write-Host ("[stub] Creating log directory: {0}" -f $d);'
+        'try{[IO.Directory]::CreateDirectory($d)|Out-Null}catch{Write-Host "[stub] WARN: Could not create log dir: $_"};'
         '$o=Join-Path $d ("docker-installer-hostoutput-"+(Get-Date -Format "yyyyMMdd-HHmmss")+".log");'
+        'Write-Host ("[stub] Output log: {0}" -f $o);'
+        'Write-Host "[stub] Invoking installer script via powershell.exe -File...";'
+        'Write-Host ("[stub] DEBUG: Temp file exists: {0}, Size: {1}" -f (Test-Path $p), (Get-Item $p -ErrorAction SilentlyContinue).Length);'
+        'Write-Host "[stub] DEBUG: First 200 chars of temp file:";'
+        'Get-Content $p -Raw -ErrorAction SilentlyContinue | Select-Object -First 1 | ForEach-Object { if($_.Length -gt 200){$_.Substring(0,200)}else{$_} } | Write-Host;'
+        'Write-Host "[stub] DEBUG: About to invoke powershell.exe -File $p";'
         '$e=0;'
-        'try{powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $p *>&1|Tee-Object -FilePath $o;$e=$LASTEXITCODE}'
-        'catch{$e=1;$m=$_.Exception.Message;try{Add-Content -LiteralPath $o -Value ("[stub] Exception: {0}" -f $m) -Encoding utf8}catch{};if($_.Exception.StackTrace){try{Add-Content -LiteralPath $o -Value ("[stub] Stack:`n{0}" -f $_.Exception.StackTrace) -Encoding utf8}catch{}}}'
-        'finally{Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue};'
+        'try{'
+        '  Write-Host "[stub] DEBUG: Calling powershell.exe now...";'
+        '  & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $p 2>&1|Tee-Object -FilePath $o|ForEach-Object{Write-Host $_};'
+        '  $e=$LASTEXITCODE;'
+        '  Write-Host "[stub] DEBUG: powershell.exe returned exit code $e";'
+        '}catch{'
+        '  Write-Host "[stub] ERROR invoking powershell.exe: $_";'
+        '  if($_.Exception.Message){Write-Host "[stub] Exception message: $($_.Exception.Message)"};'
+        '  $e=1;'
+        '};'
+        'Write-Host ("[stub] Installer process finished with code: {0}" -f $e);'
+        'Write-Host "[stub] Cleaning up temp file";'
+        'Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue;'
+        'Write-Host ("[stub] Stub script complete. Exiting with code: {0}" -f $e);'
         'exit $e'
+        '}catch{'
+        'Write-Host "[stub] FATAL ERROR in stub script: $_";'
+        'if($_.Exception.StackTrace){Write-Host "[stub] Stack trace: $($_.Exception.StackTrace)"};'
+        'exit 1'
+        '}'
     )
     $stubTemplate = [string]::Concat($stubSegments)
     $stubScript = $stubTemplate.Replace('__PAYLOAD__', $compressedInstallScript)
@@ -920,53 +1205,259 @@ finally {
         $manifest = $manifestLines -join "`n"
 
         Set-Content -LiteralPath $manifestPath -Value $manifest -Encoding ASCII
-        Write-Host "Installing Docker Engine on Windows node '$nodeName' via host-process pod." -ForegroundColor Cyan
-
-        $applyOutput = & $kubectlCmd.Path @kubectlArgs apply -f $manifestPath 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            Write-Warning ("Failed to create installer pod for node '{0}'. kubectl output:`n{1}" -f $nodeName, ($applyOutput | Out-String))
-            if (Test-Path -LiteralPath $manifestPath) { Remove-Item -LiteralPath $manifestPath -Force }
-            continue
-        }
-
+        
         try {
-            $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
-            $installSucceeded = $false
-            while ((Get-Date) -lt $deadline) {
-                $phaseOutput = & $kubectlCmd.Path @kubectlArgs get pod $podName -n $Namespace -o jsonpath='{.status.phase}' 2>&1
+            if ($SkipInstallation) {
+                Write-Host "⏭️  Skipping Docker installation on node '$nodeName' (SkipInstallation flag set)" -ForegroundColor Yellow
+                Write-Host "   Proceeding directly to verification..." -ForegroundColor Yellow
+                # Skip pod creation, go straight to verification
+                Remove-Item -LiteralPath $manifestPath -Force -ErrorAction SilentlyContinue
+            }
+            else {
+                Write-Host "Installing Docker Engine on Windows node '$nodeName' via host-process pod." -ForegroundColor Cyan
+
+                $applyOutput = & $kubectlCmd.Path @kubectlArgs apply -f $manifestPath 2>&1
                 if ($LASTEXITCODE -ne 0) {
-                    Start-Sleep -Seconds 5
+                    Write-Warning ("Failed to create installer pod for node '{0}'. kubectl output:`n{1}" -f $nodeName, ($applyOutput | Out-String))
+                    if (Test-Path -LiteralPath $manifestPath) { Remove-Item -LiteralPath $manifestPath -Force }
                     continue
                 }
-                $phase = ($phaseOutput | Out-String).Trim()
-                if ($phase -eq 'Succeeded') {
-                    $installSucceeded = $true
-                    break
+                # Wait for pod to be running before attempting to stream logs
+                Write-Host "Waiting for installer pod to start..." -ForegroundColor Cyan
+                $podReady = $false
+                $startWaitDeadline = (Get-Date).AddSeconds(60)
+                while ((Get-Date) -lt $startWaitDeadline) {
+                    $phaseOutput = & $kubectlCmd.Path @kubectlArgs get pod $podName -n $Namespace -o jsonpath='{.status.phase}' 2>&1
+                    if ($LASTEXITCODE -eq 0) {
+                        $phase = ($phaseOutput | Out-String).Trim()
+                        if ($phase -eq 'Running' -or $phase -eq 'Succeeded' -or $phase -eq 'Failed') {
+                            $podReady = $true
+                            break
+                        }
+                    }
+                    Start-Sleep -Seconds 2
                 }
-                if ($phase -eq 'Failed') {
-                    $logs = & $kubectlCmd.Path @kubectlArgs logs $podName -n $Namespace 2>&1
-                    $logText = ($logs | Out-String).Trim()
-                    if ([string]::IsNullOrWhiteSpace($logText)) {
-                        Write-Warning ("Docker installer pod on node '{0}' failed but produced no log output." -f $nodeName)
-                    }
-                    elseif ($logText -match "Cannot process the XML from the 'Output' stream") {
-                        Write-Warning ("Docker installer pod on node '{0}' failed. kubectl could not decode the pod logs (likely UTF-16 output). Check the node's persistent logs under C:\\k\\docker-installer\\." -f $nodeName)
-                    }
-                    else {
-                        Write-Warning ("Docker installer pod on node '{0}' failed. Logs:`n{1}" -f $nodeName, $logText)
-                    }
+
+                if (-not $podReady) {
+                    Write-Warning "Pod failed to start within 60 seconds."
                     $describe = & $kubectlCmd.Path @kubectlArgs describe pod $podName -n $Namespace 2>&1
                     Write-Warning ("kubectl describe pod output:`n{0}" -f ($describe | Out-String))
-                    Write-Warning ('To inspect installer logs on node ''{0}'', run scripts\Debug-WindowsHost.ps1 -NodeName ''{0}'' -Command "Get-ChildItem ''C:\k\docker-installer'' | Sort-Object LastWriteTime"' -f $nodeName)
-                    break
+                    continue
                 }
-                Start-Sleep -Seconds 5
-            }
 
-            if (-not $installSucceeded) {
-                if ((Get-Date) -ge $deadline) {
-                    Write-Warning 'Timed out waiting for Docker installer pod to complete.'
+                # Stream logs in real-time with kubectl logs --follow
+                Write-Host "=== Streaming Docker installation logs from pod '$podName' ===" -ForegroundColor Cyan
+                $logJob = Start-Job -ScriptBlock {
+                    param($KubectlPath, $KubectlArgs, $PodName, $Namespace)
+                    $allArgs = $KubectlArgs + @('logs', $PodName, '-n', $Namespace, '--follow', '--timestamps')
+                    & $KubectlPath $allArgs 2>&1
+                } -ArgumentList $kubectlCmd.Path, $kubectlArgs, $podName, $Namespace
+
+                # Monitor pod status while streaming logs
+                $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+                $installSucceeded = $false
+                $lastLogCheck = Get-Date
+            
+                while ((Get-Date) -lt $deadline) {
+                    # Display any new log output from the background job
+                    if ($logJob.HasMoreData) {
+                        $logJob | Receive-Job | ForEach-Object { Write-Host $_ }
+                        $lastLogCheck = Get-Date
+                    }
+
+                    # Check pod status
+                    $phaseOutput = & $kubectlCmd.Path @kubectlArgs get pod $podName -n $Namespace -o jsonpath='{.status.phase}' 2>&1
+                    if ($LASTEXITCODE -eq 0) {
+                        $phase = ($phaseOutput | Out-String).Trim()
+                        if ($phase -eq 'Succeeded') {
+                            # Collect any remaining logs
+                            Start-Sleep -Seconds 2
+                            if ($logJob.HasMoreData) {
+                                $logJob | Receive-Job | ForEach-Object { Write-Host $_ }
+                            }
+                            $installSucceeded = $true
+                            break
+                        }
+                        if ($phase -eq 'Failed') {
+                            # Collect any remaining logs
+                            Start-Sleep -Seconds 2
+                            if ($logJob.HasMoreData) {
+                                $logJob | Receive-Job | ForEach-Object { Write-Host $_ }
+                            }
+                            $describe = & $kubectlCmd.Path @kubectlArgs describe pod $podName -n $Namespace 2>&1
+                            Write-Warning ("kubectl describe pod output:`n{0}" -f ($describe | Out-String))
+                            break
+                        }
+                    }
+                    Start-Sleep -Seconds 3
                 }
+
+                # Stop the log streaming job
+                if ($logJob) {
+                    Stop-Job -Job $logJob -ErrorAction SilentlyContinue
+                    if ($logJob.HasMoreData) {
+                        $logJob | Receive-Job | ForEach-Object { Write-Host $_ }
+                    }
+                    Remove-Job -Job $logJob -Force -ErrorAction SilentlyContinue
+                }
+
+                Write-Host "=== End of Docker installation logs ===" -ForegroundColor Cyan
+
+                if (-not $installSucceeded) {
+                    if ((Get-Date) -ge $deadline) {
+                        Write-Warning 'Timed out waiting for Docker installer pod to complete.'
+                    }
+                    Write-Warning "Docker installation pod failed or timed out for node '$nodeName'"
+                    continue
+                }
+            } # End of if ($SkipInstallation) else block
+
+            # Verify Docker is actually installed before marking as successful
+            # This runs regardless of whether installation was skipped or attempted
+            Write-Host "Verifying Docker installation on node '$nodeName'..." -ForegroundColor Cyan
+            $verifyScript = @'
+$dockerServices = Get-Service -Name docker,com.docker.service,moby-engine -ErrorAction SilentlyContinue
+if ($dockerServices) {
+    $running = $dockerServices | Where-Object { $_.Status -eq 'Running' }
+    if ($running) {
+        Write-Output "DOCKER_VERIFIED: Service '$($running.Name)' is running"
+        exit 0
+    } else {
+        Write-Output "DOCKER_NOT_RUNNING: Found services but none running: $($dockerServices.Name -join ', ')"
+        exit 1
+    }
+} else {
+    Write-Output "DOCKER_NOT_FOUND: No Docker service found"
+    exit 1
+}
+'@
+            $verifyEncoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($verifyScript))
+            
+            $verifyPodName = "docker-verify-$safeName-" + ([Guid]::NewGuid().ToString('N').Substring(0, 6))
+            $verifyManifest = @"
+apiVersion: v1
+kind: Pod
+metadata:
+  name: $verifyPodName
+  namespace: $Namespace
+spec:
+  hostNetwork: true
+  nodeSelector:
+    kubernetes.io/hostname: $nodeName
+  tolerations:
+  - key: "sku"
+    operator: "Equal"
+    value: "Windows"
+    effect: "NoSchedule"
+  securityContext:
+    windowsOptions:
+      hostProcess: true
+      runAsUserName: "NT AUTHORITY\\SYSTEM"
+  containers:
+  - name: verify
+    image: mcr.microsoft.com/windows/nanoserver:ltsc2022
+    command:
+    - powershell.exe
+    - -NoProfile
+    - -EncodedCommand
+    - $verifyEncoded
+  restartPolicy: Never
+"@
+            $verifyManifestPath = Join-Path ([System.IO.Path]::GetTempPath()) "$verifyPodName.yaml"
+            Set-Content -LiteralPath $verifyManifestPath -Value $verifyManifest -Encoding ASCII
+            
+            $verifyOutput = & $kubectlCmd.Path @kubectlArgs apply -f $verifyManifestPath 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warning ("Failed to create verification pod: {0}" -f ($verifyOutput | Out-String))
+                if (Test-Path -LiteralPath $verifyManifestPath) { Remove-Item -LiteralPath $verifyManifestPath -Force }
+                continue
+            }
+            
+            # Wait for verification pod to complete
+            $verifyDeadline = (Get-Date).AddSeconds(30)
+            $verified = $false
+            while ((Get-Date) -lt $verifyDeadline) {
+                $verifyPhase = & $kubectlCmd.Path @kubectlArgs get pod $verifyPodName -n $Namespace -o jsonpath='{.status.phase}' 2>&1
+                if ($LASTEXITCODE -eq 0) {
+                    $phase = ($verifyPhase | Out-String).Trim()
+                    if ($phase -eq 'Succeeded') {
+                        # Get logs using Start-Process to capture output without PowerShell XML deserialization
+                        # Build kubectl arguments
+                        $kubectlArgs2 = @('logs', $verifyPodName, '-n', $Namespace) + $kubectlArgs
+                        
+                        # Use Start-Process with output redirection to avoid XML parsing
+                        $tempLogFile = [System.IO.Path]::GetTempFileName()
+                        try {
+                            $psi = New-Object System.Diagnostics.ProcessStartInfo
+                            $psi.FileName = $kubectlCmd.Path
+                            $psi.Arguments = ($kubectlArgs2 -join ' ')
+                            $psi.RedirectStandardOutput = $true
+                            $psi.RedirectStandardError = $true
+                            $psi.UseShellExecute = $false
+                            $psi.CreateNoWindow = $true
+                            
+                            $process = New-Object System.Diagnostics.Process
+                            $process.StartInfo = $psi
+                            [void]$process.Start()
+                            
+                            $stdout = $process.StandardOutput.ReadToEnd()
+                            $stderr = $process.StandardError.ReadToEnd()
+                            $process.WaitForExit()
+                            $verifyLogsExitCode = $process.ExitCode
+                            
+                            if ($verifyLogsExitCode -eq 0) {
+                                $verifyText = $stdout.Trim()
+                                Write-Host "Verification result: $verifyText"
+                                if ($verifyText -match 'DOCKER_VERIFIED:') {
+                                    $verified = $true
+                                }
+                                else {
+                                    Write-Warning "Docker verification output did not contain expected marker: $verifyText"
+                                }
+                            }
+                            else {
+                                Write-Warning ("Failed to retrieve verification logs (exit code {0}). StdOut: {1} StdErr: {2}" -f $verifyLogsExitCode, $stdout, $stderr)
+                            }
+                        }
+                        finally {
+                            if (Test-Path $tempLogFile) { Remove-Item $tempLogFile -Force -ErrorAction SilentlyContinue }
+                        }
+                        break
+                    }
+                    if ($phase -eq 'Failed') {
+                        # Get logs using Start-Process to avoid XML parsing
+                        $kubectlArgs2 = @('logs', $verifyPodName, '-n', $Namespace) + $kubectlArgs
+                        
+                        $psi = New-Object System.Diagnostics.ProcessStartInfo
+                        $psi.FileName = $kubectlCmd.Path
+                        $psi.Arguments = ($kubectlArgs2 -join ' ')
+                        $psi.RedirectStandardOutput = $true
+                        $psi.RedirectStandardError = $true
+                        $psi.UseShellExecute = $false
+                        $psi.CreateNoWindow = $true
+                        
+                        $process = New-Object System.Diagnostics.Process
+                        $process.StartInfo = $psi
+                        [void]$process.Start()
+                        
+                        $stdout = $process.StandardOutput.ReadToEnd()
+                        $stderr = $process.StandardError.ReadToEnd()
+                        $process.WaitForExit()
+                        
+                        $verifyLogsOutput = if ($stdout) { $stdout } else { $stderr }
+                        Write-Warning ("Docker verification pod failed. Logs:`n{0}" -f $verifyLogsOutput)
+                        break
+                    }
+                }
+                Start-Sleep -Seconds 2
+            }
+            
+            # Cleanup verification pod
+            & $kubectlCmd.Path @kubectlArgs delete pod $verifyPodName -n $Namespace --ignore-not-found 2>&1 | Out-Null
+            if (Test-Path -LiteralPath $verifyManifestPath) { Remove-Item -LiteralPath $verifyManifestPath -Force }
+            
+            if (-not $verified) {
+                Write-Warning "Docker installation could not be verified on node '$nodeName'. Marking as FAILED."
                 continue
             }
 
@@ -975,7 +1466,8 @@ finally {
                 Write-Warning ("Failed to annotate node '{0}' after Docker installation. Output:`n{1}" -f $nodeName, ($annotateOutput | Out-String))
             }
             else {
-                Write-Host "Docker installation completed on node '$nodeName'." -ForegroundColor Green
+                Write-Host "Docker installation VERIFIED and completed on node '$nodeName'." -ForegroundColor Green
+                [void]$successfulNodes.Add($nodeName)
             }
         }
         finally {
@@ -984,7 +1476,8 @@ finally {
         }
     }
 
-    return $processedNodes.ToArray()
+    # Return only successfully installed nodes; caller should fail if count is 0
+    return $successfulNodes.ToArray()
 }
 
 function Export-DockerInstallerLogs {
@@ -1255,4 +1748,45 @@ foreach ($file in $files) {
             }
         }
     }
+}
+
+# Auto-invoke function when script is run directly (not dot-sourced)
+if ($MyInvocation.InvocationName -ne '.') {
+    $scriptParams = @{
+        Namespace        = $Namespace
+        TimeoutSeconds   = $TimeoutSeconds
+        SkipInstallation = $SkipInstallation
+    }
+    if ($KubeConfigPath) {
+        $scriptParams['KubeConfigPath'] = $KubeConfigPath
+    }
+    
+    $successfulNodes = @(Install-DockerOnWindowsNodes @scriptParams)
+    
+    # Validate Docker installation succeeded on at least one node
+    if ($successfulNodes.Count -eq 0) {
+        Write-Host ""
+        Write-Host "=====================================" -ForegroundColor Red
+        Write-Host "Docker installation FAILED" -ForegroundColor Red
+        Write-Host "=====================================" -ForegroundColor Red
+        Write-Host "No nodes were successfully configured with Docker Engine."
+        Write-Host "Check the logs above for error details."
+        Write-Host ""
+        Write-Host "Common issues:" -ForegroundColor Yellow
+        Write-Host "  1. Embedded script exits prematurely (check for PowerShell errors)"
+        Write-Host "  2. Network connectivity to aka.ms Moby download URLs"
+        Write-Host "  3. Windows Containers feature not available"
+        Write-Host "  4. Insufficient permissions (hostProcess pods require privileged access)"
+        Write-Host ""
+        Write-Error "Docker installation failed: no nodes were processed successfully"
+        exit 1
+    }
+    
+    Write-Host ""
+    Write-Host "=====================================" -ForegroundColor Green
+    Write-Host "Docker installation SUCCESS" -ForegroundColor Green
+    Write-Host "=====================================" -ForegroundColor Green
+    Write-Host "Docker Engine validated on $($successfulNodes.Count) node(s): $($successfulNodes -join ', ')" -ForegroundColor Green
+    Write-Host ""
+    exit 0
 }

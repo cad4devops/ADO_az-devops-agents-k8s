@@ -40,7 +40,7 @@ parameters:
       - "__ACR_NAME__"
   - name: useAzureLocal
     type: boolean
-    default: false
+    default: __USE_AZURE_LOCAL__
   - name: aksResourceGroup
     type: string
     default: "rg-aks-ado-agents-__INSTANCE_NUMBER__"

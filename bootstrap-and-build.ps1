@@ -51,6 +51,7 @@ param(
     [Parameter(Mandatory = $false)][string]$ImageRefreshPipelineName = "$AzureDevOpsRepo-weekly-image-refresh",
     [Parameter(Mandatory = $false)][string]$RunOnPoolSamplePipelineName = "$AzureDevOpsRepo-run-on-selfhosted-pool-sample-helm",
     [Parameter(Mandatory = $false)][string]$DeployAksInfraPipelineName = "$AzureDevOpsRepo-deploy-aks-helm",
+    [Parameter(Mandatory = $false)][string]$DeployAksHciInfraPipelineName = "$AzureDevOpsRepo-deploy-aks-hci-helm",
     [Parameter(Mandatory = $false)][string]$KubeConfigSecretFile = "AKS_workload-cluster-$InstanceNumber-kubeconfig_file",
     [Parameter(Mandatory = $false)][string]$UbuntuOnPremPoolName = "UbuntuLatestPoolOnPrem",
     [Parameter(Mandatory = $false)][string]$WindowsOnPremPoolName = "WindowsLatestPoolOnPrem",
@@ -1042,6 +1043,13 @@ if ($shouldInstallDocker) {
 # Render pipeline templates by replacing tokens
 Write-Host "Rendering pipeline templates in .azuredevops/pipelines (replacing tokens)"
 $pipelineTemplates = Get-ChildItem -Path (Join-Path $repoRoot '.azuredevops\pipelines') -Filter '*.template.yml' -File -Recurse
+
+# Determine default values for useAzureLocal and useOnPremAgents based on bootstrap flags
+$useAzureLocalDefault = if ($UseAzureLocal.IsPresent) { 'true' } else { 'false' }
+$useOnPremAgentsDefault = if ($UseAzureLocal.IsPresent) { 'true' } else { $UseOnPremAgents }
+
+Write-Host "Pipeline parameter defaults: useAzureLocal=$useAzureLocalDefault, useOnPremAgents=$useOnPremAgentsDefault"
+
 foreach ($tpl in $pipelineTemplates) {
     $text = Get-Content -Raw -Path $tpl.FullName -ErrorAction Stop
     $replacements = @{
@@ -1060,7 +1068,8 @@ foreach ($tpl in $pipelineTemplates) {
         '__SKIP_CONTAINER_REGISTRY__'          = ($ContainerRegistryName -and -not [string]::IsNullOrWhiteSpace($ContainerRegistryName))
         '__UBUNTU_ONPREM_POOL_NAME__'          = $UbuntuOnPremPoolName
         '__WINDOWS_ONPREM_POOL_NAME__'         = $WindowsOnPremPoolName
-        '__USE_ONPREM_AGENTS__'                = $UseOnPremAgents
+        '__USE_ONPREM_AGENTS__'                = $useOnPremAgentsDefault
+        '__USE_AZURE_LOCAL__'                  = $useAzureLocalDefault
         '__AZURE_DEVOPS_PROJECT_WIKI_NAME__'   = $AzureDevOpsProjectWikiName
     }
     foreach ($k in $replacements.Keys) {
@@ -1075,6 +1084,13 @@ foreach ($tpl in $pipelineTemplates) {
 }
 
 # Invoke helper to create/update variable group and pipelines (if present)
+# The helper will create 6 pipelines:
+#   1. deploy-selfhosted-agents-helm (agent deployment)
+#   2. uninstall-selfhosted-agents-helm (agent cleanup)
+#   3. validate-selfhosted-agents-helm (agent validation)
+#   4. weekly-agent-images-refresh (weekly image rebuild)
+#   5. run-on-selfhosted-pool-sample-helm (smoke test)
+#   6. deploy-aks.yml OR deploy-aks-hci.yml (infrastructure deployment - conditional on UseAzureLocal)
 $vgHelper = Join-Path $repoRoot 'scripts\create-variablegroup-and-pipelines.ps1'
 if (Test-Path $vgHelper) {
     if ($AutoRepairAzDevOpsExtension) {
@@ -1115,8 +1131,13 @@ if (Test-Path $vgHelper) {
             '-UninstallPipelineName', $UninstallPipelineName,
             '-ValidatePipelineName', $ValidatePipelineName,
             '-ImageRefreshPipelineName', $ImageRefreshPipelineName,
-            '-RunOnPoolSamplePipelineName', $RunOnPoolSamplePipelineName
+            '-RunOnPoolSamplePipelineName', $RunOnPoolSamplePipelineName,
+            '-DeployAksInfraPipelineName', $DeployAksInfraPipelineName,
+            '-DeployAksHciInfraPipelineName', $DeployAksHciInfraPipelineName
         )
+        if ($UseAzureLocal.IsPresent) {
+            $vgArgs += '-UseAzureLocal'
+        }
         # Stream helper output live to the console while capturing it for later logging.
         # Using Tee-Object lets us display each output line as it arrives and also keep a copy.
         $vgOutput = @()

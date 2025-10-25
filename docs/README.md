@@ -2,15 +2,45 @@
 
 This folder contains user and operator documentation for deploying, validating, and maintaining Azure DevOps self‑hosted agents on Kubernetes.
 
-- Top-level docs
+## Core Documentation
+
+### Setup & Deployment
 
 - `bootstrap-and-build.md` — Orchestrator (infra + prebaked image build + pipeline provisioning)
-- `deploy-selfhosted-agents.md` — Helm deployment & update flow (Linux now defaults to DinD variant `linux-sh-agent-dind`)
+- `bootstrap-env.md` — Environment setup and prerequisites
+- `deploy-selfhosted-agents.md` — Helm deployment & update flow
 - `validate-selfhosted-agents.md` — Post‑deploy validation
-- `run-on-selfhosted-pool-sample.md` — Minimal usage example
 - `uninstall-selfhosted-agents.md` — Removal & cleanup
 - `weekly-agent-pipeline.md` — Scheduled weekly prebaked image refresh
+
+### Docker-in-Docker (DinD) Support
+
+✅ **Both Linux and Windows DinD are fully functional on Azure AKS and AKS-HCI (Azure Local)**
+
+#### Windows DinD
+
+- `WINDOWS-DIND-WORKING-SOLUTION.md` — ✅ **AKS-HCI Manual Installation Guide**
+- `WINDOWS-DIND-AZURE-AKS-MANUAL-INSTALLATION.md` — ✅ **Azure AKS Manual Installation Guide**
+- `WINDOWS-DIND-YAML-MANIFESTS.md` — Kubernetes manifests and Helm configuration
+- `WINDOWS-DIND-IMPLEMENTATION.md` — Technical implementation details
+
+**Key Points:**
+
+- Windows DinD requires manual Docker Engine installation on Windows nodes
+- Same installation process works on both Azure AKS and AKS-HCI
+- Docker 28.0.2 coexists with containerd (Kubernetes runtime)
+- Named pipe `\\.\pipe\docker_engine` enables DinD mounting
+
+#### Linux DinD
+
+- Linux DinD is **built-in** to the `linux-sh-agent-dind` image variant
+- No additional installation required
+- Works out-of-the-box on both Azure AKS and AKS-HCI
+
+### Quick Reference
+
 - `QUICK-COMMANDS.md` — Common build/deploy commands
+- `run-on-selfhosted-pool-sample.md` — Minimal usage example
 
 Note: `validate-selfhosted-agents.md` and `deploy-selfhosted-agents.md` now support a `useOnPremAgents` boolean pipeline parameter to toggle whether CI jobs run on the repository's on-prem pool (for example `UbuntuLatestPoolOnPrem`) or use the hosted `ubuntu-latest` pool. Even when the parameter is left false, the pipeline computes an effective flag so that setting `useAzureLocal: true` automatically runs the jobs on the on-prem pool.
 
@@ -27,6 +57,8 @@ Recent key updates (2025-10)
 
 | Area | Change | Impact |
 |------|--------|--------|
+| **Windows DinD** | **✅ Working on BOTH Azure AKS & AKS-HCI** | **Manual Docker install via hostProcess pods; same process for both platforms** |
+| **Linux DinD** | **✅ Built-in support for BOTH platforms** | **Works out-of-the-box on Azure AKS & AKS-HCI** |
 | Images | Prebaked agents now default (Linux + Windows) | < 1 min cold start |
 | Linux Variant | DinD (`linux-sh-agent-dind`) is the default; weekly pipeline pins `LINUX_REPOSITORY_NAME` accordingly | In-pod Docker daemon, isolated build context |
 | Versioning | Dynamic agent version via GitHub releases | No manual bumps |

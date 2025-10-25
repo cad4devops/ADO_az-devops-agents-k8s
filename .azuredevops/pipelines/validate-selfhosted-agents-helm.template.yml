@@ -22,7 +22,7 @@ parameters:
     default: __USE_ONPREM_AGENTS__ # Set to true to use on-premises agents, false to use cloud agents
   - name: useAzureLocal
     type: boolean
-    default: false # When false (standard AKS), Windows DinD is not supported and will be forced to 'docker'
+    default: __USE_AZURE_LOCAL__ # Windows DinD works on both standard AKS and AKS-HCI (requires Docker Engine installation)
   - name: ubuntuOnPremPoolName
     type: string
     default: "__UBUNTU_ONPREM_POOL_NAME__"
@@ -379,13 +379,6 @@ stages:
                 Write-Host "##vso[task.setvariable variable=poolName]$poolName"
                 $variant = [string]$cfg.windowsImageVariant
                 if ([string]::IsNullOrWhiteSpace($variant)) { $variant = 'docker' }
-                
-                # ARCHITECTURE RULE: Windows DinD only supported on AKS-HCI
-                if (-not $useLocalVal -and $variant -eq 'dind') {
-                  Write-Warning "Architecture rule: Windows DinD not supported on standard AKS. Forcing variant to 'docker'."
-                  $variant = 'docker'
-                }
-                
                 Write-Host "##vso[task.setvariable variable=windowsImageVariant]$variant"
                 $winVersion = [string]$cfg.windowsVersion
                 if ([string]::IsNullOrWhiteSpace($winVersion)) { $winVersion = '2022' }

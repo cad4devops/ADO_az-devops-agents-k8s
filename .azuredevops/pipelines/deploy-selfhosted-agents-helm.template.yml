@@ -14,10 +14,10 @@ parameters:
     default: "2022"
   - name: windowsImageVariant
     type: string
-    default: "dind" # Default: dind for AKS-HCI. Automatically forced to 'docker' for standard AKS.
+    default: "dind" # DinD requires Docker Engine installed on Windows nodes (both AKS and AKS-HCI)
     values:
-      - "dind" # Only supported on AKS-HCI (useAzureLocal=true)
-      - "docker" # Standard Windows agents (works on both AKS and AKS-HCI)
+      - "dind" # Requires Docker Engine (can be installed via Install-DockerOnWindowsNodes.ps1)
+      - "docker" # Standard Windows agents (works on all clusters)
   - name: linuxImageVariant
     type: string
     default: "dind"
@@ -39,7 +39,7 @@ parameters:
     default: false
   - name: useAzureLocal
     type: boolean
-    default: false
+    default: __USE_AZURE_LOCAL__
   - name: azureDevOpsOrgUrl
     type: string
     default: "__AZURE_DEVOPS_ORG_URL__"
@@ -114,44 +114,6 @@ stages:
             vmImage: ubuntu-latest
         steps:
           - checkout: self
-
-          - task: PowerShell@2
-            displayName: Enforce architecture rules (Windows DinD only on AKS-HCI)
-            inputs:
-              targetType: inline
-              pwsh: true
-              script: |
-                Set-StrictMode -Version Latest
-                $useAzureLocal = '${{ parameters.useAzureLocal }}'
-                $windowsImageVariant = '${{ parameters.windowsImageVariant }}'
-                
-                Write-Host "useAzureLocal: $useAzureLocal"
-                Write-Host "windowsImageVariant (requested): $windowsImageVariant"
-                
-                # ARCHITECTURE RULE: Windows DinD only supported on AKS-HCI
-                if ($useAzureLocal -ne 'True' -and $windowsImageVariant -eq 'dind') {
-                  Write-Warning "============================================================"
-                  Write-Warning "ARCHITECTURE ENFORCEMENT"
-                  Write-Warning "============================================================"
-                  Write-Warning "Windows DinD is NOT supported on standard AKS."
-                  Write-Warning "Standard AKS uses containerd (not Docker Engine)."
-                  Write-Warning "The \\.\pipe\docker_engine named pipe does not exist."
-                  Write-Warning ""
-                  Write-Warning "Windows DinD is ONLY available on AKS-HCI (useAzureLocal=true)"
-                  Write-Warning "where Docker Engine is pre-installed on Windows nodes."
-                  Write-Warning ""
-                  Write-Warning "Forcing windowsImageVariant from 'dind' to 'docker'"
-                  Write-Warning "============================================================"
-                  
-                  # Override the parameter for downstream tasks
-                  Write-Host "##vso[task.setvariable variable=WINDOWS_IMAGE_VARIANT]docker"
-                } else {
-                  Write-Host "##vso[task.setvariable variable=WINDOWS_IMAGE_VARIANT]$windowsImageVariant"
-                }
-                
-                $effectiveVariant = $env:WINDOWS_IMAGE_VARIANT
-                if (-not $effectiveVariant) { $effectiveVariant = '${{ parameters.windowsImageVariant }}' }
-                Write-Host "Effective windowsImageVariant: $effectiveVariant"
 
           - ${{ if eq(parameters.useAzureLocal, true) }}:
               - task: DownloadSecureFile@1
@@ -574,7 +536,7 @@ stages:
               DEPLOY_LINUX: $(DEPLOY_LINUX)
               LINUX_IMAGE_VARIANT: "${{ parameters.linuxImageVariant }}"
               DEPLOY_WINDOWS: "${{ parameters.deployWindows }}"
-              WINDOWS_IMAGE_VARIANT: "$(WINDOWS_IMAGE_VARIANT)"
+              WINDOWS_IMAGE_VARIANT: "${{ parameters.windowsImageVariant }}"
               AZDO_ORG_URL: "${{ parameters.azureDevOpsOrgUrl }}"
               USE_AZURE_LOCAL: "${{ parameters.useAzureLocal }}"
               KUBECONFIG_AZURE_LOCAL: "${{ variables.kubeconfigAzureLocal }}"
@@ -676,23 +638,15 @@ stages:
               pwsh: true
               script: |
                 Set-StrictMode -Version Latest
-                # Use the effective windowsImageVariant (may have been overridden)
-                $effectiveWindowsVariant = '${{ parameters.windowsImageVariant }}'
-                $useAzureLocal = $${{ parameters.useAzureLocal }}
-                if (-not $useAzureLocal -and $effectiveWindowsVariant -eq 'dind') {
-                  Write-Host "Architecture rule applied: forcing windowsImageVariant to 'docker' (was 'dind') for standard AKS"
-                  $effectiveWindowsVariant = 'docker'
-                }
-                
                 $config = [ordered]@{
                   instanceNumber    = '${{ parameters.instanceNumber }}'
                   deployLinux       = $${{ parameters.deployLinux }}
                   deployWindows     = $${{ parameters.deployWindows }}
                   azureDevOpsOrgUrl = '${{ parameters.azureDevOpsOrgUrl }}'
                   windowsVersion    = '${{ parameters.windowsVersion }}'
-                  windowsImageVariant = $effectiveWindowsVariant
+                  windowsImageVariant = '${{ parameters.windowsImageVariant }}'
                   linuxImageVariant = '${{ parameters.linuxImageVariant }}'
-                  useAzureLocal     = $useAzureLocal
+                  useAzureLocal     = $${{ parameters.useAzureLocal }}
                 } | ConvertTo-Json -Depth 5
                 $path = Join-Path $env:BUILD_ARTIFACTSTAGINGDIRECTORY 'config.json'
                 $config | Out-File $path -Encoding utf8
