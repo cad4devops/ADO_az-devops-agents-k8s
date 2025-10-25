@@ -61,7 +61,7 @@ RUN powershell -Command " \
 COPY ./start-prebaked.ps1 ./start.ps1
 
 ENV DOCKER_HOST="npipe:////./pipe/docker_engine"
-ENV DOCKER_BUILDKIT="1"
+ENV DOCKER_BUILDKIT="0"
 ENV DOCKER_CONFIG="C:\\ProgramData\\docker"
 
 CMD powershell .\start.ps1
