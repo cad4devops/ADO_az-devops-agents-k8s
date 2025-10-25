@@ -43,6 +43,7 @@ stages:
     jobs:
       - job: RunParallelTests
         displayName: "Run parallel tests on selected pool"
+        timeoutInMinutes: 30
         pool:
           ${{ if and(eq(parameters.os, 'linux'), parameters.useAzureLocal) }}:
             name: KubernetesPoolOnPremLinux${{ parameters.instanceNumber }}

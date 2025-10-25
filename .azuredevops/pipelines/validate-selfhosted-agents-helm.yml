@@ -330,6 +330,7 @@ stages:
                 }
       - job: ValidateWindows
         displayName: "Validate Windows self-hosted pool ($[ dependencies.LoadConfig.outputs['LoadConfig.ParseConfig.poolNameWindows'] ])"
+        timeoutInMinutes: 60
         pool:
           ${{ if parameters.useOnPremAgents }}:
             name: ${{ parameters.ubuntuOnPremPoolName }}

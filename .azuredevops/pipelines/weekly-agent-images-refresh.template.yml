@@ -710,6 +710,8 @@ stages:
           - LinuxAgentImage
           - WindowsAgentImage_2022
           - WindowsAgentImage_2025
+          - WindowsDinDAgentImage_2022
+          - WindowsDinDAgentImage_2025
         condition: and(succeededOrFailed(), eq(${{ parameters.skipBuildStage }}, false))
         pool:
           ${{ if parameters.useOnPremAgents }}:
