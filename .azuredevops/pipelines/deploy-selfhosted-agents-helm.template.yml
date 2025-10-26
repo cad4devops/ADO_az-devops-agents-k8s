@@ -46,6 +46,10 @@ parameters:
   - name: instanceNumber
     type: string
     default: "__INSTANCE_NUMBER__"
+  - name: skipDockerInstall
+    type: boolean
+    default: false
+    displayName: "Skip automated Docker installation (use if Docker already manually installed)"
   - name: bootstrapPoolName
     type: string
     default: "__BOOTSTRAP_POOL_NAME__"
@@ -373,7 +377,7 @@ stages:
                     }
                     Write-Host 'Windows nodes verified and have NoSchedule taints.'
 
-              - ${{ if eq(parameters.windowsImageVariant, 'dind') }}:
+              - ${{ if and(eq(parameters.windowsImageVariant, 'dind'), eq(parameters.skipDockerInstall, false)) }}:
                   - task: PowerShell@2
                     displayName: Install Docker Engine on Windows nodes (DinD requirement)
                     env:

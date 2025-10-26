@@ -80,6 +80,10 @@ spec:
   hostNetwork: true
   nodeSelector:
     kubernetes.io/hostname: $NodeName
+  tolerations:
+  - effect: NoSchedule
+    key: sku
+    value: Windows
   securityContext:
     windowsOptions:
       hostProcess: true

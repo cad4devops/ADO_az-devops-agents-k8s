@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: win-docker-install
+  namespace: default
+spec:
+  hostNetwork: true
+  nodeSelector:
+    kubernetes.io/os: windows
+  tolerations:
+  - effect: NoSchedule
+    key: sku
+    value: Windows
+  containers:
+  - name: installer
+    image: mcr.microsoft.com/windows/nanoserver:ltsc2022
+    command:
+    - powershell.exe
+    - -Command
+    - "while(1){Start-Sleep 60}"
+    securityContext:
+      windowsOptions:
+        hostProcess: true
+        runAsUserName: "NT AUTHORITY\\SYSTEM"
+  restartPolicy: Never
