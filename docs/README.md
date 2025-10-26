@@ -15,21 +15,28 @@ This folder contains user and operator documentation for deploying, validating, 
 
 ### Docker-in-Docker (DinD) Support
 
-✅ **Both Linux and Windows DinD are fully functional on Azure AKS and AKS-HCI (Azure Local)**
+✅ **Both Linux and Windows DinD are fully automated and production-ready on Azure AKS and AKS-HCI (Azure Local)**
 
-#### Windows DinD
+#### Comprehensive Guide
 
-- `WINDOWS-DIND-WORKING-SOLUTION.md` — ✅ **AKS-HCI Manual Installation Guide**
-- `WINDOWS-DIND-AZURE-AKS-MANUAL-INSTALLATION.md` — ✅ **Azure AKS Manual Installation Guide**
-- `WINDOWS-DIND-YAML-MANIFESTS.md` — Kubernetes manifests and Helm configuration
-- `WINDOWS-DIND-IMPLEMENTATION.md` — Technical implementation details
+- `WINDOWS-DIND-GUIDE.md` — **Complete Windows DinD guide** covering:
+  - Architecture and platform support (Azure AKS + AKS-HCI)
+  - Automated installation via bootstrap script
+  - Configuration and deployment
+  - Testing and verification
+  - Troubleshooting
+  - Security best practices
+  - Performance tuning
+  - Migration guides
 
 **Key Points:**
 
-- Windows DinD requires manual Docker Engine installation on Windows nodes
-- Same installation process works on both Azure AKS and AKS-HCI
+- **Windows DinD is fully automated** — use `-EnsureWindowsDocker` flag with bootstrap script
+- No manual installation steps required
+- Same automated process works on both Azure AKS and AKS-HCI
 - Docker 28.0.2 coexists with containerd (Kubernetes runtime)
 - Named pipe `\\.\pipe\docker_engine` enables DinD mounting
+- Production-ready and fully tested (October 2025)
 
 #### Linux DinD
 
@@ -57,8 +64,9 @@ Recent key updates (2025-10)
 
 | Area | Change | Impact |
 |------|--------|--------|
-| **Windows DinD** | **✅ Working on BOTH Azure AKS & AKS-HCI** | **Manual Docker install via hostProcess pods; same process for both platforms** |
-| **Linux DinD** | **✅ Built-in support for BOTH platforms** | **Works out-of-the-box on Azure AKS & AKS-HCI** |
+| **Windows DinD** | **✅ Fully automated on Azure AKS & AKS-HCI** | **One-command setup via `-EnsureWindowsDocker` flag** |
+| **Linux DinD** | **✅ Built-in support for both platforms** | **Works out-of-the-box on Azure AKS & AKS-HCI** |
+| Docker Installation | Automated via `Install-DockerOnWindowsNodes.ps1` | No manual steps required |
 | Images | Prebaked agents now default (Linux + Windows) | < 1 min cold start |
 | Linux Variant | DinD (`linux-sh-agent-dind`) is the default; weekly pipeline pins `LINUX_REPOSITORY_NAME` accordingly | In-pod Docker daemon, isolated build context |
 | Versioning | Dynamic agent version via GitHub releases | No manual bumps |

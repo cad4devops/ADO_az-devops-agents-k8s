@@ -186,7 +186,8 @@ spec:
                     Write-Host "⚠️  Docker service exists but not running (Status: $($service.Status))" -ForegroundColor Yellow
                     Write-Host "   Will attempt to start existing Docker service instead of reinstalling..." -ForegroundColor Yellow
                 }
-            } catch {
+            }
+            catch {
                 Write-Host "ℹ️  Could not parse service check output" -ForegroundColor Gray
             }
         }
@@ -275,7 +276,8 @@ spec:
             Write-Host "   Name: $($serviceInfo.Name)" -ForegroundColor Gray
             Write-Host "   Status: $($serviceInfo.Status) (1=Stopped, 4=Running)" -ForegroundColor Gray
             Write-Host "   StartType: $($serviceInfo.StartType) (2=Automatic, 3=Manual)" -ForegroundColor Gray
-        } catch {
+        }
+        catch {
             Write-Host $startOutput
         }
 

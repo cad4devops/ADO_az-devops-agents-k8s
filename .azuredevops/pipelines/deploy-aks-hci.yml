@@ -37,9 +37,9 @@ parameters:
   - name: DeleteCluster
     type: boolean
     default: false
-  - name: windowsOnPremPoolName
+  - name: bootstrapPoolName
     type: string
-    default: "WindowsLatestPoolOnPrem"
+    default: "KubernetesPoolWindows"
 
 variables:
   - group: "ADO_az-devops-agents-k8s-002-azurelocal" # to get AZDO_PAT
@@ -66,7 +66,7 @@ stages:
     jobs:
       - job: deploy
         displayName: Create AKS-HCI Workload Cluster
-        pool: ${{ parameters.windowsOnPremPoolName }}
+        pool: ${{ parameters.bootstrapPoolName }}
         steps:
           - checkout: self
 

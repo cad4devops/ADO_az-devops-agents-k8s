@@ -62,14 +62,14 @@ Kubernetes + containers give you:
 
 ## Docker-in-Docker (DinD) Support <a id="dind-support"></a>
 
-✅ **Both Linux and Windows Docker-in-Docker are fully functional on Azure AKS and AKS-HCI (Azure Local)**
+✅ **Both Linux and Windows Docker-in-Docker are fully automated and production-ready on Azure AKS and AKS-HCI (Azure Local)**
 
 ### Platform Support Matrix
 
-| Platform | Linux DinD | Windows DinD | Installation Method |
-|----------|-----------|--------------|---------------------|
-| **Azure AKS** | ✅ Built-in | ✅ Manual | Automatic / Manual Docker install |
-| **AKS-HCI (Azure Local)** | ✅ Built-in | ✅ Manual | Automatic / Manual Docker install |
+| Platform | Linux DinD | Windows DinD | Installation |
+|----------|-----------|--------------|--------------|
+| **Azure AKS** | ✅ Built-in | ✅ Automated | One-command setup |
+| **AKS-HCI (Azure Local)** | ✅ Built-in | ✅ Automated | One-command setup |
 
 ### Linux DinD
 
@@ -80,24 +80,40 @@ Kubernetes + containers give you:
 
 ### Windows DinD
 
-* Requires **manual Docker Engine installation** on Windows nodes
+* **Fully automated installation** via bootstrap script (`-EnsureWindowsDocker` flag)
 * Same installation process works on both Azure AKS and AKS-HCI
 * Docker 28.0.2 coexists with containerd (Kubernetes container runtime)
 * Named pipe `\\.\pipe\docker_engine` enables DinD mounting
+* Tested and verified on Windows Server 2019/2022/2025
 
-**Installation Guides:**
+**Quick Start:**
 
-* **Azure AKS**: See `docs/WINDOWS-DIND-AZURE-AKS-MANUAL-INSTALLATION.md`
-* **AKS-HCI**: See `docs/WINDOWS-DIND-WORKING-SOLUTION.md`
-* **Technical Details**: See `docs/WINDOWS-DIND-IMPLEMENTATION.md`
-* **Kubernetes Manifests**: See `docs/WINDOWS-DIND-YAML-MANIFESTS.md`
+```powershell
+# Automated Windows DinD setup - works on both Azure AKS and AKS-HCI
+pwsh -NoProfile -File .\bootstrap-and-build.ps1 `
+  -InstanceNumber 003 `
+  -ADOCollectionName <org> `
+  -AzureDevOpsProject <project> `
+  -AzureDevOpsRepo <repo> `
+  -EnableWindows `
+  -EnsureWindowsDocker
+```
+
+**Complete Guide:** See `docs/WINDOWS-DIND-GUIDE.md` for:
+* Architecture and how it works
+* Configuration examples
+* Testing and verification
+* Troubleshooting
+* Security best practices
+* Performance tuning
 
 **Key Points:**
 
-* Windows DinD requires Docker Engine manually installed via hostProcess pods
+* Windows DinD installation is **fully automated** - no manual steps required
 * Both platforms use containerd as the Kubernetes runtime (Docker is for DinD workloads only)
 * No platform restrictions—Windows DinD works identically on Azure AKS and AKS-HCI
-* Installation is a one-time setup per Windows node
+* Installation is a one-time automated setup per Windows node
+* Production-ready and fully tested (October 2025)
 
 - - -
 

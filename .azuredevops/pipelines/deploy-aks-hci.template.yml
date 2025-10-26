@@ -37,9 +37,9 @@ parameters:
   - name: DeleteCluster
     type: boolean
     default: false
-  - name: windowsOnPremPoolName
+  - name: bootstrapPoolName
     type: string
-    default: "__WINDOWS_ONPREM_POOL_NAME__"
+    default: "__BOOTSTRAP_POOL_NAME__"
 
 variables:
   - group: "__AZURE_DEVOPS_VARIABLE_GROUP__" # to get AZDO_PAT
@@ -66,7 +66,7 @@ stages:
     jobs:
       - job: deploy
         displayName: Create AKS-HCI Workload Cluster
-        pool: ${{ parameters.windowsOnPremPoolName }}
+        pool: ${{ parameters.bootstrapPoolName }}
         steps:
           - checkout: self
 
