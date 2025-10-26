@@ -106,6 +106,7 @@ stages:
     jobs:
       - job: ValidateLinux
         displayName: "Validate Linux self-hosted pool ($[ dependencies.LoadConfig.outputs['LoadConfig.ParseConfig.poolNameLinux'] ])"
+        timeoutInMinutes: 60
         pool:
           ${{ if parameters.useOnPremAgents }}:
             name: ${{ parameters.ubuntuOnPremPoolName }}
