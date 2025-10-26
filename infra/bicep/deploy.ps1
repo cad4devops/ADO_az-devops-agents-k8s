@@ -242,8 +242,27 @@ az deployment group what-if --resource-group $ResourceGroupName --template-file 
 
 Write-Host "Creating deployment..."
 # Execute the deployment and capture outputs so we can reference the ACR name created by Bicep
-$deployResult = az deployment group create --resource-group $ResourceGroupName --template-file $bicepFile @paramArgs --only-show-errors | ConvertFrom-Json
-if ($deployResult.properties.outputs) {
+$deployOutput = az deployment group create --resource-group $ResourceGroupName --template-file $bicepFile @paramArgs --only-show-errors 2>&1
+$deployExitCode = $LASTEXITCODE
+
+if ($deployExitCode -ne 0) {
+    Write-Error "Deployment failed with exit code $deployExitCode. Output:"
+    Write-Error ($deployOutput | Out-String)
+    Fail "AKS deployment to resource group '$ResourceGroupName' failed. Review the error above."
+}
+
+$deployResult = $null
+if ($deployOutput) {
+    try {
+        $deployResult = $deployOutput | ConvertFrom-Json -ErrorAction Stop
+    }
+    catch {
+        Write-Warning "Failed to parse deployment output as JSON: $($_.Exception.Message)"
+        Write-Warning "Raw output: $deployOutput"
+    }
+}
+
+if ($deployResult -and $deployResult.properties.outputs) {
     Write-Host "Deployment outputs:"
     $deployResult.properties.outputs | ConvertTo-Json -Depth 5 | Write-Host
 }

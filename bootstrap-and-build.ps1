@@ -108,16 +108,6 @@ param(
 )
 
 $scriptRoot = Split-Path -Parent $PSCommandPath
-$sharedInstallerPath = Join-Path $scriptRoot 'scripts/Install-DockerOnWindowsNodes.ps1'
-if (-not (Test-Path -LiteralPath $sharedInstallerPath)) {
-    throw "Shared installer module not found at $sharedInstallerPath"
-}
-. $sharedInstallerPath
-
-# Ensure the shared installer exported the expected function before continuing.
-if (-not (Get-Command -Name Install-DockerOnWindowsNodes -CommandType Function -ErrorAction SilentlyContinue)) {
-    throw 'Install-DockerOnWindowsNodes not defined after importing shared installer module.'
-}
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -391,7 +381,7 @@ else {
         '-LinuxVmSize', $LinuxVmSize,
         '-WindowsVmSize', $WindowsVmSize
     )
-    if ($EnableWindows.IsPresent) { $deployArgs += '-EnableWindows'; $deployArgs += $true }
+    if ($EnableWindows.IsPresent) { $deployArgs += '-EnableWindows:$true' }
     if ($ContainerRegistryName) { $deployArgs += '-ContainerRegistryName'; $deployArgs += $ContainerRegistryName }
     if ($ContainerRegistryName) { $deployArgs += '-SkipContainerRegistry'; }
 
@@ -1025,17 +1015,33 @@ $shouldInstallDocker = $false
 if ($EnsureWindowsDocker.IsPresent) {
     $shouldInstallDocker = $true
 }
-elseif ($UseAzureLocal.IsPresent -or $EnableWindows.IsPresent -or $expectedWindowsNodes -gt 0) {
+elseif ($UseAzureLocal.IsPresent -and ($EnableWindows.IsPresent -or $expectedWindowsNodes -gt 0)) {
+    # Only auto-install Docker for AKS-HCI (UseAzureLocal)
+    # For Azure AKS, the deployment pipeline handles Docker installation
     $shouldInstallDocker = $true
 }
 
 if ($shouldInstallDocker) {
     Write-Host "Ensuring Docker Engine is installed on Windows Kubernetes nodes." -ForegroundColor Cyan
     try {
-        Install-DockerOnWindowsNodes -KubeConfigPath $KubeConfigFilePath
+        $dockerInstallerScript = Join-Path $scriptRoot 'scripts/Install-DockerOnWindowsNodes.ps1'
+        if (-not (Test-Path -LiteralPath $dockerInstallerScript)) {
+            Write-Warning "Docker installer script not found at $dockerInstallerScript"
+        }
+        else {
+            & $dockerInstallerScript -KubeConfigPath $KubeConfigFilePath
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warning "Docker installation script exited with code $LASTEXITCODE"
+            }
+        }
     }
     catch {
         Write-Warning ("Failed to ensure Docker installation on Windows nodes: {0}" -f $_.Exception.Message)
+    }
+}
+else {
+    if ($EnableWindows.IsPresent -or $expectedWindowsNodes -gt 0) {
+        Write-Host "Docker installation skipped for Azure AKS - will be handled by deployment pipeline" -ForegroundColor Yellow
     }
 }
 
