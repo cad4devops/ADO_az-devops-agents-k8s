@@ -34,6 +34,7 @@ parameters:
   - name: attachAcr
     type: boolean
     default: false
+    displayName: "Attach ACR to AKS (required for Azure AKS to pull images; not needed for AKS-HCI if using secrets)"
   - name: skipLinux
     type: boolean
     default: false
@@ -169,37 +170,50 @@ stages:
                         if [ -z "$principalId" ] || [ "$principalId" = "null" ]; then
                           principalId=$(az aks show -g "$RG" -n "$CLUSTER" --query "servicePrincipalProfile.clientId" -o tsv 2>/dev/null || true)
                         fi
+                        
+                        # Also get kubelet identity (the one that actually pulls images)
+                        kubeletObjectId=$(az aks show -g "$RG" -n "$CLUSTER" --query "identityProfile.kubeletidentity.objectId" -o tsv 2>/dev/null || true)
 
                         need_attach=1
-                        if [ -n "$principalId" ] && [ "$principalId" != "null" ]; then
-                          # Resolve ACR resource id if possible
-                          acrId=$(az acr show -n "$ACR_NAME" --query id -o tsv 2>/dev/null || true)
-                          if [ -z "$acrId" ]; then
-                            # If ACR_NAME looks like a resource id, use it
-                            if echo "$ACR_NAME" | grep -q "/subscriptions/"; then
-                              acrId="$ACR_NAME"
-                            else
-                              echo "Warning: could not resolve ACR resource id for '$ACR_NAME' - will attempt attach (az will validate)."
-                              acrId=""
+                        
+                        # Resolve ACR resource id if possible
+                        acrId=$(az acr show -n "$ACR_NAME" --query id -o tsv 2>/dev/null || true)
+                        if [ -z "$acrId" ]; then
+                          # If ACR_NAME looks like a resource id, use it
+                          if echo "$ACR_NAME" | grep -q "/subscriptions/"; then
+                            acrId="$ACR_NAME"
+                          else
+                            echo "Warning: could not resolve ACR resource id for '$ACR_NAME' - will attempt attach (az will validate)."
+                            acrId=""
+                          fi
+                        fi
+
+                        if [ -n "$acrId" ]; then
+                          # Check for role assignment on EITHER the cluster identity OR the kubelet identity
+                          assignCount=0
+                          
+                          if [ -n "$principalId" ] && [ "$principalId" != "null" ]; then
+                            assignCount=$(az role assignment list --assignee "$principalId" --scope "$acrId" --query "length([])" -o tsv 2>/dev/null || echo 0)
+                            if [ "$assignCount" -gt 0 ]; then
+                              echo "Found existing role assignment(s) between AKS cluster identity ($principalId) and ACR ($acrId). Skipping attach."
+                              need_attach=0
                             fi
                           fi
-
-                          if [ -n "$acrId" ]; then
-                            # Check for any role assignment for this principal on the ACR scope
-                            assignCount=$(az role assignment list --assignee "$principalId" --scope "$acrId" --query "length([])" -o tsv 2>/dev/null || echo 0)
-                            if [ -n "$assignCount" ] && [ "$assignCount" -gt 0 ]; then
-                              echo "Found existing role assignment(s) between AKS principal ($principalId) and ACR ($acrId). Skipping attach."
+                          
+                          if [ "$need_attach" -eq 1 ] && [ -n "$kubeletObjectId" ] && [ "$kubeletObjectId" != "null" ]; then
+                            assignCount=$(az role assignment list --assignee "$kubeletObjectId" --scope "$acrId" --query "length([])" -o tsv 2>/dev/null || echo 0)
+                            if [ "$assignCount" -gt 0 ]; then
+                              echo "Found existing role assignment(s) between AKS kubelet identity ($kubeletObjectId) and ACR ($acrId). Skipping attach."
                               need_attach=0
-                            else
-                              echo "No role assignment found between AKS principal ($principalId) and ACR ($acrId). Will attach."
-                              need_attach=1
                             fi
-                          else
-                            # If we couldn't resolve acrId, be conservative and attach
-                            need_attach=1
+                          fi
+                          
+                          if [ "$need_attach" -eq 1 ]; then
+                            echo "No role assignment found between AKS identities and ACR ($acrId). Will attach."
                           fi
                         else
-                          echo "Could not determine AKS cluster principalId/servicePrincipalProfile; proceeding to attach ACR to be safe."
+                          # If we couldn't resolve acrId, be conservative and attach
+                          echo "Could not resolve ACR resource id; will attempt attach to be safe."
                           need_attach=1
                         fi
 

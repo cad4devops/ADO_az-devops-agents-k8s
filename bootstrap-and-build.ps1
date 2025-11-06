@@ -1058,6 +1058,8 @@ Write-Host "Pipeline parameter defaults: useAzureLocal=$useAzureLocalDefault, us
 
 foreach ($tpl in $pipelineTemplates) {
     $text = Get-Content -Raw -Path $tpl.FullName -ErrorAction Stop
+    # Determine attachAcr value: false for AKS-HCI (uses imagePullSecrets), true for Azure AKS (uses managed identity)
+    $attachAcrDefault = if ($useAzureLocalDefault -eq 'true') { 'false' } else { 'true' }
     $replacements = @{
         '__ACR_NAME__'                         = $acrShort
         '__AZURE_DEVOPS_ORG_URL__'             = $AzureDevOpsOrgUrl
@@ -1076,6 +1078,7 @@ foreach ($tpl in $pipelineTemplates) {
         '__WINDOWS_ONPREM_POOL_NAME__'         = $WindowsOnPremPoolName
         '__USE_ONPREM_AGENTS__'                = $useOnPremAgentsDefault
         '__USE_AZURE_LOCAL__'                  = $useAzureLocalDefault
+        '__ATTACH_ACR__'                       = $attachAcrDefault
         '__AZURE_DEVOPS_PROJECT_WIKI_NAME__'   = $AzureDevOpsProjectWikiName
     }
     foreach ($k in $replacements.Keys) {
