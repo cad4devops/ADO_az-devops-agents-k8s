@@ -20,11 +20,11 @@ Notes:
 
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)][string]$InstanceNumber,
-    [Parameter(Mandatory = $true)][string]$Location,
-    [Parameter(Mandatory = $true)][string]$ADOCollectionName,
-    [Parameter(Mandatory = $true)][string]$AzureDevOpsProject,
-    [Parameter(Mandatory = $true)][string]$AzureDevOpsRepo,
+    [Parameter(Mandatory = $false)][string]$InstanceNumber,
+    [Parameter(Mandatory = $false)][string]$Location,
+    [Parameter(Mandatory = $false)][string]$ADOCollectionName,
+    [Parameter(Mandatory = $false)][string]$AzureDevOpsProject,
+    [Parameter(Mandatory = $false)][string]$AzureDevOpsRepo,
     [Parameter(Mandatory = $false)][string]$AzureDevOpsProjectWikiName = "$AzureDevOpsProject.wiki",
     [Parameter(Mandatory = $false)][string]$ResourceGroupName,
     [Parameter(Mandatory = $false)][string]$ContainerRegistryName, # = "devopsabcsrunners", # specify your container registry name or leave empty to create one
@@ -178,6 +178,89 @@ function MaskPat([string]$pat) {
     if ($pat.Length -le 8) { return '****' }
     $mid = -join (1..($pat.Length - 8) | ForEach-Object { '*' })
     return $pat.Substring(0, 4) + $mid + $pat.Substring($pat.Length - 4)
+}
+
+# Display usage examples if critical parameters are missing
+if ([string]::IsNullOrWhiteSpace($InstanceNumber) -or 
+    [string]::IsNullOrWhiteSpace($Location) -or 
+    [string]::IsNullOrWhiteSpace($ADOCollectionName) -or 
+    [string]::IsNullOrWhiteSpace($AzureDevOpsProject) -or 
+    [string]::IsNullOrWhiteSpace($AzureDevOpsRepo)) {
+    
+    Write-Host ""
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host "  Bootstrap and Build Script - Usage" -ForegroundColor Cyan
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "This script orchestrates the complete setup of Azure DevOps self-hosted agents on Kubernetes:" -ForegroundColor Yellow
+    Write-Host "  1. Deploys Azure infrastructure (AKS cluster + ACR)" -ForegroundColor Gray
+    Write-Host "  2. Builds and pushes Linux/Windows agent container images" -ForegroundColor Gray
+    Write-Host "  3. Creates Azure DevOps pipelines and variable groups" -ForegroundColor Gray
+    Write-Host "  4. Optionally configures Windows nodes with Docker Engine for DinD support" -ForegroundColor Gray
+    Write-Host ""
+    Write-Host "EXAMPLE 1: Azure Local / AKS-HCI Deployment" -ForegroundColor Green
+    Write-Host "  Use this for on-premises AKS-HCI clusters with an existing container registry" -ForegroundColor Gray
+    Write-Host ""
+    Write-Host "  pwsh -NoProfile -File .\bootstrap-and-build.ps1 ``" -ForegroundColor White
+    Write-Host "    -UseAzureLocal ``" -ForegroundColor White
+    Write-Host "    -InstanceNumber 001 ``" -ForegroundColor White
+    Write-Host "    -ContainerRegistryName devopsabcsrunners ``" -ForegroundColor White
+    Write-Host "    -Location canadacentral ``" -ForegroundColor White
+    Write-Host "    -ADOCollectionName cad4devops ``" -ForegroundColor White
+    Write-Host "    -AzureDevOpsProject Cad4DevOps ``" -ForegroundColor White
+    Write-Host "    -AzureDevOpsRepo ADO_az-devops-agents-k8s" -ForegroundColor White
+    Write-Host ""
+    Write-Host "  What this does:" -ForegroundColor Cyan
+    Write-Host "    - Skips Azure infrastructure deployment (assumes AKS-HCI cluster already exists)" -ForegroundColor Gray
+    Write-Host "    - Uses existing container registry 'devopsabcsrunners'" -ForegroundColor Gray
+    Write-Host "    - Builds agent images and pushes to the specified registry" -ForegroundColor Gray
+    Write-Host "    - Creates pipelines configured for AKS-HCI (uses imagePullSecrets for ACR auth)" -ForegroundColor Gray
+    Write-Host ""
+    Write-Host "EXAMPLE 2: Azure AKS Deployment with Windows DinD" -ForegroundColor Green
+    Write-Host "  Use this for cloud-based Azure AKS clusters with automated setup" -ForegroundColor Gray
+    Write-Host ""
+    Write-Host "  pwsh -NoProfile -File .\bootstrap-and-build.ps1 ``" -ForegroundColor White
+    Write-Host "    -InstanceNumber 002 ``" -ForegroundColor White
+    Write-Host "    -Location canadacentral ``" -ForegroundColor White
+    Write-Host "    -ADOCollectionName MngEnvMCAP675646 ``" -ForegroundColor White
+    Write-Host "    -AzureDevOpsProject AKS_agents ``" -ForegroundColor White
+    Write-Host "    -AzureDevOpsRepo ADO_az-devops-agents-k8s ``" -ForegroundColor White
+    Write-Host "    -EnsureWindowsDocker ``" -ForegroundColor White
+    Write-Host "    -BuildInPipeline" -ForegroundColor White
+    Write-Host ""
+    Write-Host "  What this does:" -ForegroundColor Cyan
+    Write-Host "    - Deploys complete Azure infrastructure (AKS cluster + ACR using Bicep)" -ForegroundColor Gray
+    Write-Host "    - Attaches ACR to AKS for seamless image pulling via managed identity" -ForegroundColor Gray
+    Write-Host "    - -EnsureWindowsDocker: Installs Docker Engine on Windows nodes for DinD support" -ForegroundColor Gray
+    Write-Host "    - -BuildInPipeline: Delegates image builds to Azure DevOps pipeline (recommended)" -ForegroundColor Gray
+    Write-Host "    - Creates pipelines configured for Azure AKS deployment" -ForegroundColor Gray
+    Write-Host ""
+    Write-Host "REQUIRED PARAMETERS:" -ForegroundColor Yellow
+    Write-Host "  -InstanceNumber     : Unique identifier for this deployment (e.g., 001, 002)" -ForegroundColor Gray
+    Write-Host "  -Location           : Azure region (e.g., canadacentral, eastus)" -ForegroundColor Gray
+    Write-Host "  -ADOCollectionName  : Azure DevOps organization name" -ForegroundColor Gray
+    Write-Host "  -AzureDevOpsProject : Azure DevOps project name" -ForegroundColor Gray
+    Write-Host "  -AzureDevOpsRepo    : Azure DevOps repository name" -ForegroundColor Gray
+    Write-Host ""
+    Write-Host "COMMON OPTIONAL PARAMETERS:" -ForegroundColor Yellow
+    Write-Host "  -UseAzureLocal          : Deploy to AKS-HCI instead of Azure AKS" -ForegroundColor Gray
+    Write-Host "  -ContainerRegistryName  : Existing ACR name (required for AKS-HCI)" -ForegroundColor Gray
+    Write-Host "  -EnsureWindowsDocker    : Install Docker Engine on Windows nodes (for DinD)" -ForegroundColor Gray
+    Write-Host "  -BuildInPipeline        : Build images in ADO pipeline instead of locally" -ForegroundColor Gray
+    Write-Host "  -EnableWindows          : Deploy Windows node pools (default: true if -EnsureWindowsDocker)" -ForegroundColor Gray
+    Write-Host ""
+    Write-Host "PREREQUISITES:" -ForegroundColor Yellow
+    Write-Host "  1. Azure CLI (az) installed and authenticated" -ForegroundColor Gray
+    Write-Host "  2. Environment variable AZDO_PAT set with Azure DevOps Personal Access Token" -ForegroundColor Gray
+    Write-Host "  3. Docker Desktop (if building images locally without -BuildInPipeline)" -ForegroundColor Gray
+    Write-Host "  4. kubectl configured with cluster context (for AKS-HCI deployments)" -ForegroundColor Gray
+    Write-Host ""
+    Write-Host "For detailed documentation, see:" -ForegroundColor Cyan
+    Write-Host "  - docs/bootstrap-and-build.md" -ForegroundColor Gray
+    Write-Host "  - docs/bootstrap-env.md (PAT setup)" -ForegroundColor Gray
+    Write-Host ""
+    
+    exit 1
 }
 
 # Validate required environment variable
