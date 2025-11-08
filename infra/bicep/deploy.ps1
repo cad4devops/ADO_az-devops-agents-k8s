@@ -293,25 +293,46 @@ if (-not $acrId) {
     Write-Warning "Unable to locate ACR resource '$deployedRegistryName' in resource group '$ResourceGroupName'. Skipping role assignment."
 }
 else {
-    # Get AKS principalId. If the cluster was created by this deployment, query it now.
+    # Get AKS kubelet identity (the identity that actually pulls images).
+    # Modern AKS uses the kubelet identity for image pulls, not the cluster's main identity.
     if (-not $aksExists) {
         $aks = az aks show -n $aksName -g $ResourceGroupName --only-show-errors | ConvertFrom-Json -ErrorAction SilentlyContinue
         if ($aks) { $aksExists = $true }
     }
 
-    if ($aksExists -and $aks.identity -and $aks.identity.principalId) {
-        $principalId = $aks.identity.principalId
-        Write-Host "Granting AcrPull role on $acrId to AKS principal (object id): $principalId"
+    if ($aksExists -and $aks.identityProfile -and $aks.identityProfile.kubeletidentity -and $aks.identityProfile.kubeletidentity.objectId) {
+        $kubeletObjectId = $aks.identityProfile.kubeletidentity.objectId
+        Write-Host "Granting AcrPull role on $acrId to AKS kubelet identity (object id): $kubeletObjectId"
         try {
-            az role assignment create --assignee-object-id $principalId --role AcrPull --scope $acrId --only-show-errors | Out-Null
-            Write-Host "Role assignment created (or already exists)."
+            az role assignment create --assignee-object-id $kubeletObjectId --role AcrPull --scope $acrId --only-show-errors 2>&1 | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "Role assignment created (or already exists)."
+            } else {
+                Write-Warning "Role assignment command exited with code $LASTEXITCODE"
+            }
+        }
+        catch {
+            Write-Warning "Role assignment command failed: $($_.Exception.Message)"
+        }
+    }
+    elseif ($aksExists -and $aks.identity -and $aks.identity.principalId) {
+        # Fallback for older AKS clusters or service principal auth that don't have kubelet identity
+        $principalId = $aks.identity.principalId
+        Write-Host "Kubelet identity not found; granting AcrPull role on $acrId to AKS cluster identity (object id): $principalId"
+        try {
+            az role assignment create --assignee-object-id $principalId --role AcrPull --scope $acrId --only-show-errors 2>&1 | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "Role assignment created (or already exists)."
+            } else {
+                Write-Warning "Role assignment command exited with code $LASTEXITCODE"
+            }
         }
         catch {
             Write-Warning "Role assignment command failed: $($_.Exception.Message)"
         }
     }
     else {
-        Write-Warning "AKS principalId not available; cannot grant AcrPull role. AKS exists: $aksExists"
+        Write-Warning "AKS kubelet identity not available; cannot grant AcrPull role. AKS exists: $aksExists"
     }
 }
 

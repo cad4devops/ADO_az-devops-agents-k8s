@@ -171,7 +171,7 @@ stages:
                           principalId=$(az aks show -g "$RG" -n "$CLUSTER" --query "servicePrincipalProfile.clientId" -o tsv 2>/dev/null || true)
                         fi
                         
-                        # Also get kubelet identity (the one that actually pulls images)
+                        # Get kubelet identity (the one that actually pulls images)
                         kubeletObjectId=$(az aks show -g "$RG" -n "$CLUSTER" --query "identityProfile.kubeletidentity.objectId" -o tsv 2>/dev/null || true)
 
                         need_attach=1
@@ -189,27 +189,33 @@ stages:
                         fi
 
                         if [ -n "$acrId" ]; then
-                          # Check for role assignment on EITHER the cluster identity OR the kubelet identity
-                          assignCount=0
+                          # Check if KUBELET identity has AcrPull (it's the one that actually pulls images)
+                          # Note: Some older deployments might have granted the role to the cluster identity instead,
+                          # but kubelet identity is what AKS actually uses for image pulls
                           
-                          if [ -n "$principalId" ] && [ "$principalId" != "null" ]; then
-                            assignCount=$(az role assignment list --assignee "$principalId" --scope "$acrId" --query "length([])" -o tsv 2>/dev/null || echo 0)
-                            if [ "$assignCount" -gt 0 ]; then
-                              echo "Found existing role assignment(s) between AKS cluster identity ($principalId) and ACR ($acrId). Skipping attach."
-                              need_attach=0
-                            fi
-                          fi
-                          
-                          if [ "$need_attach" -eq 1 ] && [ -n "$kubeletObjectId" ] && [ "$kubeletObjectId" != "null" ]; then
+                          if [ -n "$kubeletObjectId" ] && [ "$kubeletObjectId" != "null" ]; then
                             assignCount=$(az role assignment list --assignee "$kubeletObjectId" --scope "$acrId" --query "length([])" -o tsv 2>/dev/null || echo 0)
                             if [ "$assignCount" -gt 0 ]; then
                               echo "Found existing role assignment(s) between AKS kubelet identity ($kubeletObjectId) and ACR ($acrId). Skipping attach."
                               need_attach=0
+                            else
+                              echo "Kubelet identity ($kubeletObjectId) does not have ACR access. Will attach."
+                              need_attach=1
                             fi
-                          fi
-                          
-                          if [ "$need_attach" -eq 1 ]; then
-                            echo "No role assignment found between AKS identities and ACR ($acrId). Will attach."
+                          elif [ -n "$principalId" ] && [ "$principalId" != "null" ]; then
+                            # Fallback: check cluster identity (for older AKS versions or service principal auth)
+                            assignCount=$(az role assignment list --assignee "$principalId" --scope "$acrId" --query "length([])" -o tsv 2>/dev/null || echo 0)
+                            if [ "$assignCount" -gt 0 ]; then
+                              echo "Found role assignment on cluster identity ($principalId). Note: Modern AKS uses kubelet identity for image pulls."
+                              echo "Will run attach to ensure kubelet identity also has access."
+                              need_attach=1
+                            else
+                              echo "No role assignment found on cluster identity ($principalId). Will attach."
+                              need_attach=1
+                            fi
+                          else
+                            echo "Could not determine AKS identities; will attempt attach to be safe."
+                            need_attach=1
                           fi
                         else
                           # If we couldn't resolve acrId, be conservative and attach
