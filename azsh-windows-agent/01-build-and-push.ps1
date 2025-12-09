@@ -1,3 +1,124 @@
+<#
+.SYNOPSIS
+    Builds and pushes Windows Azure DevOps agent Docker images to Azure Container Registry.
+
+.DESCRIPTION
+    This script builds Docker images for Windows-based Azure DevOps self-hosted agents and 
+    pushes them to an Azure Container Registry (ACR). It supports multiple Windows versions
+    (2019, 2022, 2025) and two build modes:
+    
+    1. PRE-BAKED (default): Downloads the Azure Pipelines agent at build time and includes it
+       in the image. This results in faster agent startup times but larger images.
+    
+    2. STANDARD: The agent is downloaded at container runtime. This creates smaller images
+       but has slower startup times.
+    
+    The script automatically:
+    - Determines Windows versions to build from parameters or environment variables
+    - Detects Hyper-V isolation support and falls back to process isolation if needed
+    - Normalizes unqualified ACR names by appending .azurecr.io
+    - Fetches the latest Azure Pipelines agent version if not specified (prebaked mode)
+    - Creates multiple image tags including base, versioned, Windows-version-specific, and latest tags
+    - Logs into ACR using Azure CLI
+    - Pushes all tags to the registry with error handling
+    - Captures and reports image digests for manifest list creation
+
+.PARAMETER WindowsVersions
+    Array of Windows versions to build (e.g., @('2019', '2022', '2025')).
+    Defaults to @('2022', '2025'). Can be overridden by:
+    1. Explicit -WindowsVersions parameter (highest priority)
+    2. WIN_VERSION environment variable (single version)
+    3. WINDOWS_VERSIONS environment variable (comma-separated)
+    4. Default value (lowest priority)
+
+.PARAMETER ContainerRegistryName
+    The name or FQDN of the Azure Container Registry. If unqualified (no dots),
+    '.azurecr.io' will be appended automatically. Can be set via ACR_NAME environment variable.
+    Example: 'cragents003c66i4n7btfksg' or 'cragents003c66i4n7btfksg.azurecr.io'
+
+.PARAMETER TagSuffix
+    Optional suffix to append to tags, typically a date and commit SHA.
+    Example: '20250920-a1b2c3d'. Can be set via TAG_SUFFIX environment variable.
+
+.PARAMETER SemVer
+    Semantic version to use as an additional tag (e.g., '1.0.0').
+    Can be set via SEMVER_EFFECTIVE environment variable.
+
+.PARAMETER DisableLatest
+    If specified, the 'latest' tag will not be applied to the image.
+
+.PARAMETER DefaultAcr
+    Default ACR name to use when ContainerRegistryName is not provided.
+    Example: 'cragents003c66i4n7btfksg'
+
+.PARAMETER UsePrebaked
+    Use the prebaked Dockerfile that includes the agent at build time (default: true).
+    This is the recommended option for production as it provides faster agent startup.
+
+.PARAMETER UseStandard
+    Use the standard Dockerfile that downloads the agent at runtime.
+    This overrides -UsePrebaked if both are specified.
+
+.PARAMETER AgentVersion
+    Specific Azure Pipelines agent version to use for prebaked images.
+    If not specified, the latest version is fetched from GitHub releases.
+    Example: '4.261.0'
+
+.PARAMETER EnableHypervFallback
+    If true (default), attempts to use Hyper-V isolation and falls back to process
+    isolation if Hyper-V is not available. This allows the script to work on both
+    Hyper-V enabled and non-Hyper-V hosts.
+
+.EXAMPLE
+    pwsh ./01-build-and-push.ps1 -DefaultAcr 'cragents003c66i4n7btfksg' -WindowsVersions @('2022')
+    
+    Builds and pushes a Windows Server 2022 prebaked agent image using the latest agent version.
+
+.EXAMPLE
+    pwsh ./01-build-and-push.ps1 -DefaultAcr 'myregistry' -WindowsVersions @('2019', '2022', '2025')
+    
+    Builds and pushes agent images for all three Windows versions.
+
+.EXAMPLE
+    $env:ACR_NAME = 'cragents003.azurecr.io'
+    $env:WIN_VERSION = '2022'
+    $env:TAG_SUFFIX = '20250920-a1b2c3d'
+    pwsh ./01-build-and-push.ps1 -DefaultAcr 'fallback'
+    
+    Uses environment variables for configuration (common in CI pipelines).
+    Builds only Windows Server 2022.
+
+.EXAMPLE
+    pwsh ./01-build-and-push.ps1 -DefaultAcr 'cragents003' -WindowsVersions @('2022') -UseStandard
+    
+    Builds a standard (runtime download) Windows agent image without Hyper-V isolation fallback.
+
+.NOTES
+    Prerequisites:
+    - Docker must be installed and running with Windows containers enabled
+    - Azure CLI (az) must be installed and authenticated
+    - Current directory must be azsh-windows-agent/ containing the Dockerfiles
+    - For Hyper-V isolation: Hyper-V feature must be enabled
+    
+    CI Usage:
+    This script is designed to be called from Azure DevOps pipelines. The pipeline should:
+    - Set environment variables (ACR_NAME, WIN_VERSION, TAG_SUFFIX, etc.)
+    - Pass -WindowsVersions explicitly from pipeline tasks for clarity
+    - Run per-version jobs to parallelize builds
+    
+    Isolation Modes:
+    - Hyper-V isolation: Provides better security and compatibility across Windows versions
+    - Process isolation: Faster but requires matching host/container OS versions
+    
+    Version Precedence (for determining which Windows versions to build):
+    1. Explicit -WindowsVersions parameter (if provided by caller)
+    2. Job-level WIN_VERSION environment variable (single version)
+    3. Job-level WINDOWS_VERSIONS environment variable (CSV)
+    4. Default parameter value @('2022', '2025')
+    
+    File: azsh-windows-agent/01-build-and-push.ps1
+#>
+
 param(
     [Parameter(Mandatory = $false)]
     [string[]]$WindowsVersions = @("2022", "2025"),
