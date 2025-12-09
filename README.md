@@ -119,26 +119,29 @@ pwsh -NoProfile -File .\bootstrap-and-build.ps1 `
 
 ## Bootstrap & Build Orchestrator <a id="bootstrap-and-build"></a>
 
-This repository now includes a single-entry orchestrator script `bootstrap-and-build.ps1` that performs an end-to-end onboarding flow: deploy infra (Bicep), build & push agent images, render pipeline templates, and provision Azure DevOps resources (variable group, secure file, and required pipelines). See `docs/bootstrap-and-build.md` for full usage and examples.
+This repository includes a single-entry orchestrator script `bootstrap-and-build.ps1` that performs end-to-end onboarding: deploy infra (Bicep), build & push agent images, render pipeline templates, and provision Azure DevOps resources (variable group, secure file, and required pipelines). See `docs/bootstrap-and-build.md` for full usage and examples.
 
-Recent enhancements (2025-10):
+**Key Features (2025-10):**
 
-* Added `-SkipContainerRegistry` logic (implicit when `-ContainerRegistryName` is supplied) so existing ACR instances can be reused without attempting creation. Token `__SKIP_CONTAINER_REGISTRY__` is rendered into pipeline templates as `True`/`False` based on this detection.
-* Post-provision verification now fails fast if required ACR credential variables (`ACR_USERNAME`, `ACR_PASSWORD`) are missing from the Azure DevOps variable group after running the ACR creds helper.
-* Hardened variable-group JSON parsing (supports multiple `az` CLI / extension return shapes) to reduce false negatives in verification.
-* Added explicit parameter for `-SkipContainerRegistry` to the orchestrator to avoid referencing undeclared variables when rendering templates.
-* Normalized ACR short/FQDN handling and exports both as pipeline variables (`ACR_NAME`, `ACR_FQDN`).
-* Windows & Linux build steps now switch Docker Desktop engine automatically (when on Windows) and fall back gracefully if the Docker CLI helper is not present.
-* Workload Identity Federation automation hardened: early fail-fast creation of WIF Azure RM service connection, federated credential retries + CLI `--parameters` fallback, duplicate handling, and new `-UseAadIssuer` switch supporting the portal AAD issuer subject format. See `docs/WIF-AUTOMATION-CHANGES.md` and the WIF section in `docs/bootstrap-and-build.md`.
+* Reuse existing ACR with `-ContainerRegistryName` (skips creation)
+* Post-provision verification with fail-fast on missing ACR credentials
+* Hardened variable-group JSON parsing for multiple `az` CLI formats
+* Normalized ACR short/FQDN handling
+* Windows & Linux build steps with automatic Docker Desktop engine switching
+* Workload Identity Federation automation with WIF Azure RM service connection creation, federated credential retries, and `-UseAadIssuer` support
 
-Related local infrastructure helper improvements: `infra/scripts/AzureLocal/Manage-AksHci-WorkloadCluster.ps1` now provides:
+**Related Infrastructure Helper:**
 
-* Safer deletion logic (detects support for `-Force` / `-Confirm` before using).
-* Node pool existence/scale reconciliation with graceful fallbacks when module cmdlets differ by version.
-* Optional wait for provisioning state (`-WaitForProvisioning`) with timeout + diagnostic collection on failure.
-* Automated kubeconfig secure-file upload to Azure DevOps (REST fallback) when provided with PAT and project identifiers.
-* Dynamic next pool number detection (parses existing pool names / Hyper-V VM names) to avoid collisions.
-* Defensive module capability probing (works across differing AKS-HCI PowerShell module versions without hard failures).
+`infra/scripts/AzureLocal/Manage-AksHci-WorkloadCluster.ps1` provides:
+
+* Safer deletion logic with auto-detection of cmdlet support
+* Node pool reconciliation with graceful fallbacks
+* Optional wait for provisioning state with timeout
+* Automated kubeconfig secure-file upload to Azure DevOps
+* Dynamic next pool number detection
+* Defensive module capability probing across AKS-HCI versions
+
+See `docs/WIF-AUTOMATION-CHANGES.md` for WIF details.
 
 - - -
 
@@ -205,11 +208,13 @@ Build scripts auto-detect the latest agent version via GitHub releases. Override
 
 ## Helm Chart <a id="helm-chart"></a>
 
-Chart (v1): `helm-charts/az-selfhosted-agents` — legacy layout
+**Recommended**: Chart v2 in `helm-charts-v2/` — consolidated chart with per-OS subcharts, better values composition, and CI helpers.
 
-Chart (v2, recommended): `helm-charts-v2/` — consolidated v2 chart with per-OS subcharts, better values composition, and CI helpers. See `helm-charts-v2/README.md` for full details.
+**Legacy**: Chart v1 in `helm-charts/az-selfhosted-agents` — original layout.
 
-Key templates (v2 example):
+See `helm-charts-v2/README.md` for full details.
+
+Key templates (v2):
 
 * `linux-deploy.yaml`
 * `windows-deploy.yaml`
@@ -219,7 +224,7 @@ Key templates (v2 example):
 
 Supports enabling each pool independently via values.
 
-Quick v2 install (manual):
+Quick v2 install:
 
 ``` bash
 helm upgrade --install az-selfhosted-agents ./helm-charts-v2 -n az-devops-linux-003 --create-namespace -f values.secret.yaml
@@ -324,13 +329,9 @@ Prereqs:
 
 ### 1\. Build & Push Image \(example Linux\)
 
-```
+```powershell
 cd azsh-linux-agent
 pwsh ./01-build-and-push.ps1 -ImageTag 2025-09-20 -Registry yourrepo
-```
-
-``` powershell
-
 ```
 
 ### Getting started (bootstrap)
@@ -372,6 +373,7 @@ pwsh -NoProfile -File .\bootstrap-and-build.ps1 `
   -BuildInPipeline
 ```
 <br>
+
 **Required Environment Variables:**
 
 * `AZDO_PAT` \- Azure DevOps Personal Access Token \(required for creating pipelines and variable groups\)
@@ -395,7 +397,7 @@ See `docs/bootstrap-and-build.md` and `docs/bootstrap-env.md` for detailed instr
 
 ### 2\. Prepare values file
 
-```
+```bash
 cp helm-charts/az-selfhosted-agents/values.yaml my-values.yaml
 # Edit: enable linux.enabled=true, set image, replicas, supply base64 secrets
 ```
@@ -416,32 +418,28 @@ Small repository helpers and pipelines provide a few convenience and safety beha
 * Wrapper script: to avoid PowerShell parser/tokenization fragility for complex CLI strings, use the provided wrapper script which spawns a child `pwsh` to execute the deploy helper. See `.azuredevops/scripts/run-deploy-selfhosted-agents-helm.ps1` for the wrapper usage.
 * Helm debug capture & masking: when helpers run Helm with `--debug` they capture full debug output to a temporary log. Before publishing the log as an artifact the helpers mask/redact common secret keys and values (for example PATs, `AZP_TOKEN`, docker registry passwords, and common secret key names like `personalAccessToken`, `password`, `pw`, `token`). This masked debug log can be published for diagnostics without leaking secrets.
 * Validation pipeline parameters: the validation pipeline exposes OS-specific wait-time parameters so the sample pipeline can tune timeouts:
-    * `linuxHelloWaitSeconds` (default: 120)
-    * `windowsHelloWaitSeconds` (default: 180)
-    The validate pipeline forwards these as literal numeric parameters into the sample pipeline to avoid shell interpolation issues.
+  * `linuxHelloWaitSeconds` (default: 120)
+  * `windowsHelloWaitSeconds` (default: 180)
+  The validate pipeline forwards these as literal numeric parameters into the sample pipeline to avoid shell interpolation issues.
 
 These notes are a short summary — see the `docs/` folder for complete guidance and the pipeline YAMLs under `.azuredevops/pipelines/` for exact parameter names and behavior.
 
 ### 3\. Install Chart
 
-```
+```bash
 helm upgrade --install az-agents ./helm-charts/az-selfhosted-agents -n az-devops --create-namespace -f my-values.yaml
-```
-
-``` bash
-
 ```
 
 ### 4\. Verify
 
-```
+```bash
 kubectl get pods -n az-devops
 kubectl logs <pod> -n az-devops
 ```
 
 ### 5\. \(Optional\) Enable KEDA
 
-```
+```bash
 kubectl apply -f keda/linux/trigger-auth.yaml
 kubectl apply -f keda/linux/azure-pipelines-scaledobject.yaml
 ```
@@ -488,7 +486,7 @@ kubectl apply -f keda/linux/azure-pipelines-scaledobject.yaml
 
 Pod log snippet (successful registration):
 
-```
+```text
 1. Determining matching Azure Pipelines agent...
 2. Downloading agent...
 Listening for Jobs
@@ -538,31 +536,34 @@ Full documentation: see `docs/weekly-agent-pipeline.md`.
 
 This repository includes several key Azure DevOps pipeline YAML files used to deploy, validate, and manage self‑hosted agent pools. Below are the primary pipelines and links to additional documentation in the `docs/` folder.
 
-* Deploy self‑hosted agents: `.azuredevops/pipelines/deploy-selfhosted-agents.yml`
-    * Docs: `docs/deploy-selfhosted-agents.md` — Helm deployment of agent pools, secrets management, and optional KEDA wiring.
-* Validate self‑hosted agents: `.azuredevops/pipelines/validate-selfhosted-agents.yml`
-    * Docs: `docs/validate-selfhosted-agents.md` — Verifies agent registration and can queue the sample job to validate execution.
-    * Note (recent change): the Helm validate pipeline used by the `deploy-selfhosted-agents-helm` flow has been reworked into a 3-stage layout to make pool-name computation deterministic and robust against Azure DevOps runtime-evaluation timing issues. The stages are:
-    Why this change: Azure DevOps can evaluate job-level conditions before task outputs are available which can cause expressions that reference cross-stage outputs to resolve to Null. Computing pool names in `ParseConfig` (LoadConfig) and doing a short runtime check inside each Validate job (CheckShouldRun) gives deterministic, observable behavior and clearer logs.
-    Verification tips: run the pipeline and inspect the LoadConfig -> ParseConfig log for "Exported ..." lines (the ParseConfig task prints the values it emits). Then inspect each Validate job's `Check if ... validation should run` log — it will show whether the job will proceed and the job-local `poolName` used by the Poll step.
-        * Note: kubeconfig / local-mode behavior
-            * The `deploy-selfhosted-agents-helm` pipeline sets an explicit `USE_AZURE_LOCAL` environment variable and will pass the `-UseAzureLocal` switch to the wrapper/script only when the pipeline parameter `useAzureLocal` is true. This prevents accidentally inferring "local" mode from the mere presence of a `KUBECONFIG` value (for example, after `az aks get-credentials` runs in non-local mode).
-            * Wrapper behavior: the deploy wrapper (`.azuredevops/scripts/run-deploy-selfhosted-agents-helm.ps1`) surfaces `KUBECONFIG` to the child by adding a `-Kubeconfig <path>` argument when `KUBECONFIG` is present in the task environment. It will only forward the `-UseAzureLocal` switch when the explicit `USE_AZURE_LOCAL` env var is truthy. The wrapper also emits lightweight debug lines to the pipeline log (for example: `DEBUG: USE_AZURE_LOCAL env='...' KUBECONFIG='...'` and whether it forwarded `-UseAzureLocal`).
-            * Helper selection rules: both deploy and uninstall helpers accept `-Kubeconfig` and `-KubeconfigAzureLocal`. Selection logic implemented in the helpers is:
-                * If `-UseAzureLocal` is provided, the helper prefers the `-KubeconfigAzureLocal` parameter (explicit local kubeconfig filename) and will fall back to `-Kubeconfig` or legacy locations only if the local file is missing.
-                * If `-UseAzureLocal` is not provided, the helper prefers an explicitly provided `-Kubeconfig` (absolute or resolved relative path) or the `KUBECONFIG` environment variable. If none is available, the helper will attempt to fetch AKS credentials via `az aks get-credentials` into a temporary kubeconfig (this requires `az` on PATH and the `aksResourceGroup`/`aksClusterName` information when running in CI).
-                * If credential fetching via `az` is not possible and no kubeconfig is provided, the helpers fail early with a clear message to avoid accidental operations against the wrong cluster.
-            * Visual/logging: the helpers now print which kubeconfig parameter was selected (debug) and use a green success message when the current kubectl context matches the expected cluster/context so pipeline readers can quickly spot a positive match.
-        1. LoadConfig — downloads the `agent-config` artifact and runs a `ParseConfig` task that computes and emits job outputs (instanceNumber, deployLinux, deployWindows, azureDevOpsOrgUrl, useAzureLocal, poolNameLinux, poolNameWindows).
-        2. Validate — two parallel jobs (Linux and Windows). Each job downloads the same artifact and runs a short `CheckShouldRun` step that reads `config.json` and sets job-local variables (shouldRun, poolName, instanceNumber, etc.). The Poll and TriggerSample steps in the job are gated on `shouldRun` so they only execute when the config requests it. This avoids fragile cross-stage condition evaluation while keeping the computed pool names visible to the jobs.
-        3. Summary — collects trigger results (when present) and emits a small validation summary attachment.
+* **Deploy self‑hosted agents**: `.azuredevops/pipelines/deploy-selfhosted-agents.yml`
+  * Docs: `docs/deploy-selfhosted-agents.md` — Helm deployment of agent pools, secrets management, and optional KEDA wiring.
+* **Validate self‑hosted agents**: `.azuredevops/pipelines/validate-selfhosted-agents.yml`
+  * Docs: `docs/validate-selfhosted-agents.md` — Verifies agent registration and can queue the sample job to validate execution.
+  * Note (recent change): the Helm validate pipeline used by the `deploy-selfhosted-agents-helm` flow has been reworked into a 3-stage layout to make pool-name computation deterministic and robust against Azure DevOps runtime-evaluation timing issues. The stages are:
+    1. LoadConfig — downloads the `agent-config` artifact and runs a `ParseConfig` task that computes and emits job outputs (instanceNumber, deployLinux, deployWindows, azureDevOpsOrgUrl, useAzureLocal, poolNameLinux, poolNameWindows).
+    2. Validate — two parallel jobs (Linux and Windows). Each job downloads the same artifact and runs a short `CheckShouldRun` step that reads `config.json` and sets job-local variables (shouldRun, poolName, instanceNumber, etc.). The Poll and TriggerSample steps in the job are gated on `shouldRun` so they only execute when the config requests it. This avoids fragile cross-stage condition evaluation while keeping the computed pool names visible to the jobs.
+    3. Summary — collects trigger results (when present) and emits a small validation summary attachment.
 
-* Run-on self‑hosted pool sample: `.azuredevops/pipelines/run-on-selfhosted-pool-sample.yml`
-    * Docs: `docs/run-on-selfhosted-pool-sample.md` — Minimal sample pipeline to exercise agents.
-* Uninstall self‑hosted agents: `.azuredevops/pipelines/uninstall-selfhosted-agents.yml`
-    * Docs: `docs/uninstall-selfhosted-agents.md` — Cleanup pipeline for helm releases, secrets, and optional registry cleanup.
-* Weekly agent images refresh: `.azuredevops/pipelines/weekly-agent-images-refresh.yml`
-    * Docs: `docs/weekly-agent-pipeline.md` — Scheduled weekly rebuild/push plus digest capture and artifacts.
+  Why this change: Azure DevOps can evaluate job-level conditions before task outputs are available which can cause expressions that reference cross-stage outputs to resolve to Null. Computing pool names in `ParseConfig` (LoadConfig) and doing a short runtime check inside each Validate job (CheckShouldRun) gives deterministic, observable behavior and clearer logs.
+  
+  Verification tips: run the pipeline and inspect the LoadConfig -> ParseConfig log for "Exported ..." lines (the ParseConfig task prints the values it emits). Then inspect each Validate job's `Check if ... validation should run` log — it will show whether the job will proceed and the job-local `poolName` used by the Poll step.
+
+  * Note: kubeconfig / local-mode behavior
+    * The `deploy-selfhosted-agents-helm` pipeline sets an explicit `USE_AZURE_LOCAL` environment variable and will pass the `-UseAzureLocal` switch to the wrapper/script only when the pipeline parameter `useAzureLocal` is true. This prevents accidentally inferring "local" mode from the mere presence of a `KUBECONFIG` value (for example, after `az aks get-credentials` runs in non-local mode).
+    * Wrapper behavior: the deploy wrapper (`.azuredevops/scripts/run-deploy-selfhosted-agents-helm.ps1`) surfaces `KUBECONFIG` to the child by adding a `-Kubeconfig <path>` argument when `KUBECONFIG` is present in the task environment. It will only forward the `-UseAzureLocal` switch when the explicit `USE_AZURE_LOCAL` env var is truthy. The wrapper also emits lightweight debug lines to the pipeline log (for example: `DEBUG: USE_AZURE_LOCAL env='...' KUBECONFIG='...'` and whether it forwarded `-UseAzureLocal`).
+    * Helper selection rules: both deploy and uninstall helpers accept `-Kubeconfig` and `-KubeconfigAzureLocal`. Selection logic implemented in the helpers is:
+      * If `-UseAzureLocal` is provided, the helper prefers the `-KubeconfigAzureLocal` parameter (explicit local kubeconfig filename) and will fall back to `-Kubeconfig` or legacy locations only if the local file is missing.
+      * If `-UseAzureLocal` is not provided, the helper prefers an explicitly provided `-Kubeconfig` (absolute or resolved relative path) or the `KUBECONFIG` environment variable. If none is available, the helper will attempt to fetch AKS credentials via `az aks get-credentials` into a temporary kubeconfig (this requires `az` on PATH and the `aksResourceGroup`/`aksClusterName` information when running in CI).
+      * If credential fetching via `az` is not possible and no kubeconfig is provided, the helpers fail early with a clear message to avoid accidental operations against the wrong cluster.
+    * Visual/logging: the helpers now print which kubeconfig parameter was selected (debug) and use a green success message when the current kubectl context matches the expected cluster/context so pipeline readers can quickly spot a positive match.
+
+* **Run-on self‑hosted pool sample**: `.azuredevops/pipelines/run-on-selfhosted-pool-sample.yml`
+  * Docs: `docs/run-on-selfhosted-pool-sample.md` — Minimal sample pipeline to exercise agents.
+* **Uninstall self‑hosted agents**: `.azuredevops/pipelines/uninstall-selfhosted-agents.yml`
+  * Docs: `docs/uninstall-selfhosted-agents.md` — Cleanup pipeline for helm releases, secrets, and optional registry cleanup.
+* **Weekly agent images refresh**: `.azuredevops/pipelines/weekly-agent-images-refresh.yml`
+  * Docs: `docs/weekly-agent-pipeline.md` — Scheduled weekly rebuild/push plus digest capture and artifacts.
 
 - - -
 

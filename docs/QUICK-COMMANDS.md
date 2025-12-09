@@ -1,42 +1,72 @@
-# Quick Commands - Pre-baked Agent Deployment
+# Quick Commands Reference
 
-## 🚀 Deploy Windows Agents (3 Commands)
+## 🚀 Bootstrap (Recommended - One Command Setup)
 
-```powershell
-# 1. Build Windows images with latest agent
-cd c:\src\MngEnvMCAP675646\AKS_agents\ADO_az-devops-agents-k8s\azsh-windows-agent
-.\01-build-and-push.ps1
-
-# 2. Restart Windows pods
-kubectl rollout restart deployment -n az-devops-windows-002
-
-# 3. Watch Windows pods
-kubectl get pods -n az-devops-windows-002 --watch
-```
-
-## 🚀 Deploy Linux Agents (3 Commands)
+For new deployments, use the orchestrator script:
 
 ```powershell
-# 1. Build Linux image with latest agent
-cd c:\src\MngEnvMCAP675646\AKS_agents\ADO_az-devops-agents-k8s\azsh-linux-agent
-.\01-build-and-push.ps1
+# Set PAT
+$env:AZDO_PAT = 'your-pat-token-here'
 
-# 2. Restart Linux pods
-kubectl rollout restart deployment -n az-devops-linux-002
-
-# 3. Watch Linux pods
-kubectl get pods -n az-devops-linux-002 --watch
+# Run bootstrap (defers builds to pipeline)
+pwsh -NoProfile -File .\bootstrap-and-build.ps1 `
+  -InstanceNumber 003 `
+  -Location canadacentral `
+  -ADOCollectionName <org> `
+  -AzureDevOpsProject <project> `
+  -AzureDevOpsRepo <repo> `
+  -BuildInPipeline
 ```
 
-## What Changed
+See `docs/bootstrap-and-build.md` for detailed options.
 
-✅ **Prebaked is now DEFAULT** - no flag needed
-✅ **Latest version AUTO-DETECTED** from GitHub
-✅ **Correct URLs** in all Dockerfiles
+## 🔄 Manual Build & Deploy
+
+### Build Windows Agents
+
+```powershell
+# Navigate to Windows agent directory
+cd azsh-windows-agent
+
+# Build with latest agent (prebaked is default)
+.\01-build-and-push.ps1
+```
+
+### Build Linux Agents
+
+```powershell
+# Navigate to Linux agent directory
+cd azsh-linux-agent
+
+# Build with latest agent (prebaked is default)
+.\01-build-and-push.ps1
+```
+
+### Restart Deployments
+
+```powershell
+# Restart Windows pods (replace <instance> with your instance number)
+kubectl rollout restart deployment -n az-devops-windows-<instance>
+
+# Restart Linux pods
+kubectl rollout restart deployment -n az-devops-linux-<instance>
+```
+
+### Watch Pod Status
+
+```powershell
+# Watch Windows pods
+kubectl get pods -n az-devops-windows-<instance> --watch
+
+# Watch Linux pods
+kubectl get pods -n az-devops-linux-<instance> --watch
+```
+
 
 ## Build Options
 
-### Windows
+### Windows Build Options
+
 ```powershell
 # Default: Prebaked with latest version
 .\01-build-and-push.ps1
@@ -51,7 +81,8 @@ kubectl get pods -n az-devops-linux-002 --watch
 .\01-build-and-push.ps1 -WindowsVersions @("2022")
 ```
 
-### Linux
+### Linux Build Options
+
 ```powershell
 # Default: Prebaked with latest version
 .\01-build-and-push.ps1
@@ -65,43 +96,47 @@ kubectl get pods -n az-devops-linux-002 --watch
 
 ## Verify Success
 
-### Windows
+### Verify Windows Deployment
+
 ```powershell
 # Check latest version
 cd azsh-windows-agent
 .\Get-LatestAzureDevOpsAgent.ps1 -Platform windows
 
 # Check pod logs
-kubectl logs -n az-devops-windows-002 <pod-name> | Select-String "pre-baked"
+kubectl logs -n az-devops-windows-<instance> <pod-name> | Select-String "pre-baked"
 # Expected: "Using pre-baked Azure Pipelines agent (no download required)"
 
 # Check startup time (should be <1 min)
-kubectl get events -n az-devops-windows-002 --sort-by='.lastTimestamp' | Select-Object -Last 20
+kubectl get events -n az-devops-windows-<instance> --sort-by='.lastTimestamp' | Select-Object -Last 20
 ```
 
-### Linux
+### Verify Linux Deployment
+
 ```powershell
 # Check latest version
 cd azsh-windows-agent
 .\Get-LatestAzureDevOpsAgent.ps1 -Platform linux
 
 # Check pod logs
-kubectl logs -n az-devops-linux-002 <pod-name> | Select-String "pre-baked"
+kubectl logs -n az-devops-linux-<instance> <pod-name> | Select-String "pre-baked"
 # Expected: "Using pre-baked Azure Pipelines agent (no download required)"
 
 # Check startup time (should be <30 sec)
-kubectl get events -n az-devops-linux-002 --sort-by='.lastTimestamp' | Select-Object -Last 20
+kubectl get events -n az-devops-linux-<instance> --sort-by='.lastTimestamp' | Select-Object -Last 20
 ```
 
-## Expected Results
+## Expected Performance
 
-### Windows
+### Windows Agents
+
 - **Build time:** ~8 min per version (~25 min total for 3 versions)
 - **Pod startup:** <1 minute (down from 5-10+ minutes!)
 - **Network:** No downloads during startup
 - **KEDA:** Fast scale-up (<1 min vs 10+ min)
 
-### Linux
+### Linux Agents
+
 - **Build time:** ~5 minutes
 - **Pod startup:** <30 seconds (down from 1-2 minutes)
 - **Network:** No downloads during startup
@@ -109,4 +144,5 @@ kubectl get events -n az-devops-linux-002 --sort-by='.lastTimestamp' | Select-Ob
 
 ---
 
-**Ready?** Run command #1 to start! 🎯
+**For complete setup guidance**, see `docs/bootstrap-and-build.md`
+
