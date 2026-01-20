@@ -1106,6 +1106,22 @@ elseif ($UseAzureLocal.IsPresent -and ($EnableWindows.IsPresent -or $expectedWin
 
 if ($shouldInstallDocker) {
     Write-Host "Ensuring Docker Engine is installed on Windows Kubernetes nodes." -ForegroundColor Cyan
+    
+    # For Azure AKS (not Azure Local), get cluster credentials first
+    if (-not $UseAzureLocal.IsPresent) {
+        Write-Host "Getting AKS credentials for cluster: $aksName in resource group: $ResourceGroupName"
+        try {
+            az aks get-credentials --resource-group $ResourceGroupName --name $aksName --overwrite-existing 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warning "Failed to get AKS credentials (exit code $LASTEXITCODE). Docker installation may fail or target wrong cluster."
+            } else {
+                Write-Host "✓ AKS credentials retrieved successfully" -ForegroundColor Green
+            }
+        } catch {
+            Write-Warning "Exception getting AKS credentials: $($_.Exception.Message)"
+        }
+    }
+    
     try {
         $dockerInstallerScript = Join-Path $scriptRoot 'scripts/Install-DockerOnWindowsNodes.ps1'
         if (-not (Test-Path -LiteralPath $dockerInstallerScript)) {
