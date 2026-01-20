@@ -32,6 +32,7 @@ $envInstance = $env:INSTANCE_NUMBER
 $envDeployLinux = $env:DEPLOY_LINUX
 $envDeployWindows = $env:DEPLOY_WINDOWS
 $envAzOrg = $env:AZDO_ORG_URL
+$envAzProject = $env:SYSTEM_TEAMPROJECT
 $envLinuxImageVariant = $env:LINUX_IMAGE_VARIANT
 $envWindowsImageVariant = $env:WINDOWS_IMAGE_VARIANT
 
@@ -133,6 +134,7 @@ $argList += '-AcrName'; $argList += $envAcrName
 if ($envAcrUser) { $argList += '-AcrUsername'; $argList += $envAcrUser }
 if ($envAcrPass) { $argList += '-AcrPassword'; $argList += $envAcrPass }
 if ($envAzOrg) { $argList += '-AzureDevOpsOrgUrl'; $argList += $envAzOrg }
+if ($envAzProject) { $argList += '-AzureDevOpsProject'; $argList += $envAzProject }
 if ($envAzDo) { $argList += '-AzDevOpsToken'; $argList += $envAzDo }
 # EnsureAzDoPools should always be true unless explicitly disabled by not setting it in the wrapper
 $argList += '-EnsureAzDoPools'

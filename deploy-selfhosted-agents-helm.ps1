@@ -36,7 +36,8 @@ param(
     [Parameter(Mandatory = $false)] [ValidateSet('docker', 'dind')] [string] $WindowsImageVariant = 'docker',
     [Parameter(Mandatory = $false)] [ValidateSet('docker', 'dind', 'ubuntu22')] [string] $LinuxImageVariant = 'docker',
     [Parameter(Mandatory = $true)] [string] $AcrName, #'cragents003c66i4n7btfksg'
-    [Parameter(Mandatory = $true)] [string] $AzureDevOpsOrgUrl, #'https://dev.azure.com/cad4devops',    
+    [Parameter(Mandatory = $true)] [string] $AzureDevOpsOrgUrl, #'https://dev.azure.com/cad4devops',
+    [Parameter(Mandatory = $false)] [string] $AzureDevOpsProject, # Azure DevOps project name for project-scoped pools
     [Parameter(Mandatory = $false)] [string] $HelmTimeout = '2m',
     [Parameter(Mandatory = $false)] [switch] $UseAzureLocal,
     [Parameter(Mandatory = $false)] [string] $KubeContext = "aks-ado-agents-$InstanceNumber",
@@ -458,11 +459,11 @@ if ($shouldEnsurePools) {
     if (-not $pat) { Write-Warning 'No AzDo PAT supplied (AzDevOpsToken param or AZDO_PAT env); skipping pool creation' } else {
         $org = $AzureDevOpsOrgUrl
         if (-not $org) { Write-Warning 'No Azure DevOps org URL available; skipping pool creation' } else {
-            # Get project name from environment (pipeline provides this) or use a default
-            $projectName = $env:SYSTEM_TEAMPROJECT
+            # Get project name: prefer parameter, fallback to environment (pipeline provides SYSTEM_TEAMPROJECT)
+            $projectName = if ($AzureDevOpsProject) { $AzureDevOpsProject } else { $env:SYSTEM_TEAMPROJECT }
             
             if (-not $projectName) {
-                Write-Warning "SYSTEM_TEAMPROJECT not set; pools will be created at organization level. Set env:SYSTEM_TEAMPROJECT or pass project name to create project-scoped pools."
+                Write-Warning "No project name provided (via -AzureDevOpsProject or SYSTEM_TEAMPROJECT env); pools will be created at organization level."
             }
             else {
                 Write-Host "Creating project-scoped pools in project: $projectName"

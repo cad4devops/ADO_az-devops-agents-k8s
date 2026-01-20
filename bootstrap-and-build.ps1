@@ -1068,8 +1068,9 @@ else {
         # Attempt to ensure Docker is using Linux containers on Windows hosts
         Switch-DockerEngine -target 'linux' -timeoutSeconds 90
         # Run the linux build script from its directory so relative Dockerfile paths resolve correctly
-        $cmd = "Set-StrictMode -Version Latest; Set-Location -LiteralPath '$linuxDir'; `$env:DEFAULT_ACR='$acrShort'; `$env:ACR_NAME='$acrShort'; `$env:DOCKER_DEFAULT_PLATFORM='linux'; & .\\$linuxScriptName -ContainerRegistryName '$acrFqdn' -DefaultAcr '$acrShort'"
-        Write-Host "Invoking linux build: pwsh -NoProfile -NonInteractive -Command <script in $linuxDir>"
+        # Set LINUX_REPOSITORY_NAME to 'linux-sh-agent-dind' to match deployment expectations (as of Oct 2025, DinD is the default)
+        $cmd = "Set-StrictMode -Version Latest; Set-Location -LiteralPath '$linuxDir'; `$env:DEFAULT_ACR='$acrShort'; `$env:ACR_NAME='$acrShort'; `$env:LINUX_REPOSITORY_NAME='linux-sh-agent-dind'; `$env:DOCKER_DEFAULT_PLATFORM='linux'; & .\\$linuxScriptName -ContainerRegistryName '$acrFqdn' -DefaultAcr '$acrShort'"
+        Write-Host "Invoking linux build: pwsh -NoProfile -NonInteractive -Command <script in $linuxDir> with LINUX_REPOSITORY_NAME=linux-sh-agent-dind"
         pwsh -NoProfile -NonInteractive -Command $cmd
         if ($LASTEXITCODE -ne 0) { Write-Warning "Linux build script exited with code $LASTEXITCODE" }
     }
@@ -1083,9 +1084,17 @@ else {
     else {
         # Switch Docker to Windows containers when building Windows images
         Switch-DockerEngine -target 'windows' -timeoutSeconds 90 -postSwitchDelaySeconds 15
-        # Run the Windows build script in a separate pwsh process and pass parameters explicitly so PSBoundParameters in that script is populated correctly
-        $cmd = "Set-StrictMode -Version Latest; Set-Location -LiteralPath '$winDir'; `$env:DEFAULT_ACR='$acrShort'; `$env:ACR_NAME='$acrShort'; & .\$winScriptName -ContainerRegistryName '$acrFqdn' -DefaultAcr '$acrShort'"
-        Write-Host "Invoking windows build script in $winDir with explicit parameters"
+        # Build ALL Windows variants (both standard docker and DinD) for versions 2022 and 2025
+        # The build script will create multiple Dockerfiles:
+        #   - Dockerfile.windows-sh-agent-2022-windows2022 (standard)
+        #   - Dockerfile.windows-sh-agent-2022-windows2022-dind (Docker-in-Docker)
+        #   - Dockerfile.windows-sh-agent-2025-windows2025 (standard)
+        #   - Dockerfile.windows-sh-agent-2025-windows2025-dind (Docker-in-Docker)
+        # This ensures both standard and DinD variants are available for deployment
+        $windowsVersionsToBuild = @('2022', '2025')
+        Write-Host "Building Windows agent images for versions: $($windowsVersionsToBuild -join ', ') (includes both standard and DinD variants)"
+        $cmd = "Set-StrictMode -Version Latest; Set-Location -LiteralPath '$winDir'; `$env:DEFAULT_ACR='$acrShort'; `$env:ACR_NAME='$acrShort'; & .\$winScriptName -ContainerRegistryName '$acrFqdn' -DefaultAcr '$acrShort' -WindowsVersions @('2022','2025')"
+        Write-Host "Invoking windows build script in $winDir with WindowsVersions=2022,2025"
         pwsh -NoProfile -NonInteractive -Command $cmd
         if ($LASTEXITCODE -ne 0) { Write-Warning "Windows build invocation exited with code $LASTEXITCODE" }
     }
