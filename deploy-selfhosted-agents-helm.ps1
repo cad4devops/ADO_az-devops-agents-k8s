@@ -38,7 +38,7 @@ param(
     [Parameter(Mandatory = $true)] [string] $AcrName, #'cragents003c66i4n7btfksg'
     [Parameter(Mandatory = $true)] [string] $AzureDevOpsOrgUrl, #'https://dev.azure.com/cad4devops',
     [Parameter(Mandatory = $false)] [string] $AzureDevOpsProject, # Azure DevOps project name for project-scoped pools
-    [Parameter(Mandatory = $false)] [string] $HelmTimeout = '2m',
+    [Parameter(Mandatory = $false)] [string] $HelmTimeout = '5m', # Increased from 2m to accommodate large Windows DinD images
     [Parameter(Mandatory = $false)] [switch] $UseAzureLocal,
     [Parameter(Mandatory = $false)] [string] $KubeContext = "aks-ado-agents-$InstanceNumber",
     [Parameter(Mandatory = $false)] [string] $KubeContextAzureLocal, #"workload-cluster-003-admin@workload-cluster-003"
